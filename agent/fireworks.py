@@ -180,7 +180,8 @@ BATCH_SYS = (
 # byte-stable). Terse-style breaks judged formats for these categories:
 _CATEGORY_HINTS = {
     "factual": ("For each: lead with the direct answer covering every part "
-                "asked; one short sentence per part; no hedging."),
+                "asked and every element a complete answer needs; one short "
+                "sentence per part; no hedging."),
     "sentiment": ("For each question: answer as '<Positive|Negative|Neutral|Mixed>"
                   " - <one short justification clause>'."),
     "summary": ("Each question states its own length/format constraint "

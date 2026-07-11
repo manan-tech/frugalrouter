@@ -613,7 +613,9 @@ def code_debug(prompt: str, mode: str) -> Result:
         if tests:
             fix_ok, _ = run_with_tests(code, tests)
             ref_ok, _ = run_with_tests(ref, tests)
-            if ref_ok and not fix_ok:
+            # an echoed buggy function can pass weak asserts — never keep the
+            # echo when a working from-scratch reference exists
+            if ref_ok and (not fix_ok or _is_echo_of_buggy(prompt, code)):
                 code = ref
             if fix_ok or ref_ok:
                 bug = _bug_line_from_diff(prompt, code) or "Bug: see corrected code below."
