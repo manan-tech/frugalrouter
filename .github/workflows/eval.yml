@@ -23,6 +23,9 @@ on:
       force_emergency:
         description: "TEST_FORCE_EMERGENCY (1 = force emergency escalate-all path)"
         default: "0"
+      thresholds_json:
+        description: "CATEGORY_THRESHOLDS_JSON override (A/B testing)"
+        default: ""
 
 jobs:
   eval:
@@ -63,6 +66,7 @@ jobs:
             -e HARD_EXIT_S=${{ inputs.hard_s }} \
             -e ESCALATION_BUDGET_TOKENS=${{ inputs.budget }} \
             -e TEST_FORCE_EMERGENCY=${{ inputs.force_emergency }} \
+            -e CATEGORY_THRESHOLDS_JSON='${{ inputs.thresholds_json }}' \
             -v "$PWD/work/input:/input:ro" \
             -v "$PWD/output:/output" \
             frugalrouter:ci 2>&1 | tee agent.log

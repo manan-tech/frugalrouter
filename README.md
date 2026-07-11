@@ -114,10 +114,12 @@ A 19-task rehearsal set (`eval/rehearsal19.json`) mirrors the real task distribu
 
 | Metric | Value |
 |---|---|
-| 19-task run, default time limits | 232 s wall clock |
+| 19-task run, default time limits | 168–232 s wall clock |
+| 40-task accuracy, with escalation | 97.5 % |
 | 40-task accuracy, zero escalation | 90.0 % |
-| 40-task accuracy, with escalation | 95.0 % |
-| Fireworks tokens per escalated task | ~110–320 (measured) |
+| Emergency mode (local inference disabled) | 95.0 % via batched escalation |
+| Fireworks tokens, 19-task set (normal) | ~410–530 (measured) |
+| Fireworks tokens per escalated task | ~80–160 batched (measured) |
 | Image size | 2.24 GB |
 
 ## Configuration

@@ -2,7 +2,7 @@
 
 **Docker image (the field the grader pulls):**
 ```
-ghcr.io/manan-tech/frugalrouter:v1
+ghcr.io/manan-tech/frugalrouter:v7
 ```
 
 **Public GitHub repository:**
@@ -49,7 +49,7 @@ Stack: llama.cpp (CPU dispatch build), Qwen3-1.7B Q4_K_M, Qwen2.5-Coder-1.5B Q4_
 
 ## Pre-submit checklist
 
-- [ ] Image pushed: `docker manifest inspect ghcr.io/manan-tech/frugalrouter:v1`
+- [ ] Image pushed: `docker manifest inspect ghcr.io/manan-tech/frugalrouter:v7`
 - [ ] Package set to **public** (anonymous pull verified)
 - [ ] Repo public with README
-- [ ] Image field contains ONLY `ghcr.io/manan-tech/frugalrouter:v1` (no digest, no extra text — per organizer announcement)
+- [ ] Image field contains ONLY `ghcr.io/manan-tech/frugalrouter:v7` (no digest, no extra text — per organizer announcement)

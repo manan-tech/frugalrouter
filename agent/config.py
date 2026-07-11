@@ -64,6 +64,16 @@ ESC_CAPS = {
 CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.40, "code_gen": 0.40,
                        "logic": 0.40, "math": 0.40, "ner": 0.40,
                        "sentiment": 0.40, "summary": 0.40}
+# eval-only A/B override (the grading harness never sets this): JSON dict
+# merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
+_thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")
+if _thr_env:
+    import json as _json
+    try:
+        CATEGORY_THRESHOLDS.update({str(k): float(v)
+                                    for k, v in _json.loads(_thr_env).items()})
+    except (ValueError, TypeError):
+        pass
 # Batch multiple escalation questions into one remote chat when possible.
 BATCH_ESCALATION = True
 # ceiling on any single batched call's max_tokens (truncation-safety)

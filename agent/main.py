@@ -204,6 +204,11 @@ def main() -> int:
             flush()
             done += 1
             log(f"[{done}/{len(tasks_c)}] {tid} ({cat}, {mode}) conf={res.confidence:.2f}")
+            # machine-readable record: joined with judge verdicts by eval
+            # tooling to fit CATEGORY_THRESHOLDS (eval/calibrate.py)
+            log("CALIB " + json.dumps({"task_id": tid, "category": cat,
+                                       "confidence": round(res.confidence, 3),
+                                       "mode": mode}))
     else:
         for tid, cat, prompt in tasks_c:
             tasks_meta.append((tid, cat, prompt,
