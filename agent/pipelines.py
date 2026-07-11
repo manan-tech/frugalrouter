@@ -114,7 +114,7 @@ def math(prompt: str, mode: str) -> Result:
     direct = GENERAL.chat(
         [{"role": "system", "content": "Solve step by step, then give the final number."},
          {"role": "user", "content": prompt}],
-        max_tokens=280, thinking=(mode == "full"))
+        max_tokens=560 if mode == "full" else 280, thinking=(mode == "full"))
     dv = extract_last_number(direct)
     if dv is not None:
         vals.append(dv)
@@ -305,7 +305,9 @@ def _expand_span(entity: str, text: str) -> str:
 # code generation
 # --------------------------------------------------------------------------
 CODEGEN_SYS = ("Write clean, correct Python. Output only a single python code "
-               "block containing the complete function. No explanations.")
+               "block containing the complete function. No explanations. "
+               "If the task says to handle duplicates, operate on distinct "
+               "values unless it states otherwise.")
 TESTGEN_SYS = ("Write exactly 3 Python assert statements that test a function "
                "against the given specification. Cover normal and edge cases. "
                "Output only a python code block containing the asserts, "
@@ -473,20 +475,21 @@ DEBUG_FIX_SYS = ("You are given code with a bug and its intended behavior. "
                  "block. No explanations.")
 
 
-DEBUG_DIFF_SYS = ("Compare the original buggy code with the corrected code and "
-                  "state in ONE short sentence what the bug was. Start with "
-                  "'Bug:'. No code.")
+DEBUG_DIFF_SYS = ("You are shown a task with buggy code, and the corrected "
+                  "code. State in ONE short sentence the functional defect "
+                  "that was fixed. Start with 'Bug:'. No code, no speculation "
+                  "beyond the visible difference.")
 
 
 def _bug_line_from_diff(prompt: str, fixed_code: str) -> str:
     """Describe the bug AFTER fixing — grounded by the actual before/after
-    diff, not guessed up front (guessing produced confident nonsense)."""
+    diff. Uses the general model: the coder model hallucinates descriptions."""
     try:
-        bug = CODER.chat(
+        bug = GENERAL.chat(
             [{"role": "system", "content": DEBUG_DIFF_SYS},
              {"role": "user", "content":
               f"{prompt}\n\nCorrected code:\n```python\n{fixed_code}\n```"}],
-            max_tokens=60, temperature=0.2)
+            max_tokens=70, temperature=0.2)
         line = bug.strip().splitlines()[0] if bug.strip() else ""
         if line and not line.startswith("Bug:"):
             line = "Bug: " + line
@@ -495,17 +498,36 @@ def _bug_line_from_diff(prompt: str, fixed_code: str) -> str:
         return ""
 
 
+def _normalize_code(code: str) -> str:
+    lines = []
+    for ln in code.splitlines():
+        ln = re.sub(r"#.*", "", ln).strip()
+        if ln:
+            lines.append(re.sub(r"\s+", " ", ln))
+    return "\n".join(lines)
+
+
+def _is_echo_of_buggy(prompt: str, fixed_code: str) -> bool:
+    """The coder model sometimes returns the buggy code unchanged."""
+    m = re.search(r"def .*?(?=\.\s|$)", prompt, re.DOTALL)
+    if not m:
+        return False
+    return _normalize_code(m.group(0)) == _normalize_code(fixed_code)
+
+
 def code_debug(prompt: str, mode: str) -> Result:
     code = ""
     out = ""
-    for temp in (config.CODE_TEMP, 0.6):
+    for temp in (config.CODE_TEMP, 0.6, 0.8):
         out = CODER.chat(
             [{"role": "system", "content": DEBUG_FIX_SYS},
-             {"role": "user", "content": prompt}],
+             {"role": "user", "content": prompt if temp != 0.8 else
+              prompt + "\nThe corrected code must differ from the original."}],
             max_tokens=340, temperature=temp)
         code = extract_code(out)
-        if code and "def " in code:
+        if code and "def " in code and not _is_echo_of_buggy(prompt, code):
             break
+        code = code if code and "def " in code else ""
     if not code or "def " not in code:
         return Result(out.strip() or "Unable to determine.", 0.3, esc_max_tokens=400)
     if mode == "panic":
@@ -525,10 +547,25 @@ def code_debug(prompt: str, mode: str) -> Result:
         best_code, conf = verified
         bug = _bug_line_from_diff(prompt, best_code) or "Bug: see corrected code below."
         return Result(_code_answer(bug, best_code), conf, esc_max_tokens=400)
+    # fix and reference disagree behaviorally — let generated asserts arbitrate
+    if ref:
+        tests = _gen_tests(prompt, _signature_of(code))
+        if tests:
+            fix_ok, _ = run_with_tests(code, tests)
+            ref_ok, _ = run_with_tests(ref, tests)
+            if ref_ok and not fix_ok:
+                code = ref
+            if fix_ok or ref_ok:
+                bug = _bug_line_from_diff(prompt, code) or "Bug: see corrected code below."
+                return Result(_code_answer(bug, code), 0.7, esc_max_tokens=400)
     res = _verify_and_repair(prompt, code, mode, esc_max=400)
     final_code = extract_code(res.answer) or code
+    if _is_echo_of_buggy(prompt, final_code) and ref:
+        final_code = ref  # never ship the original buggy code back
     bug = _bug_line_from_diff(prompt, final_code) or "Bug: see corrected code below."
-    return Result(_code_answer(bug, final_code), res.confidence, esc_max_tokens=400)
+    return Result(_code_answer(bug, final_code),
+                  min(res.confidence, 0.5) if _is_echo_of_buggy(prompt, final_code)
+                  else res.confidence, esc_max_tokens=400)
 
 
 # --------------------------------------------------------------------------
@@ -555,13 +592,21 @@ def logic(prompt: str, mode: str) -> Result:
         if solved:
             return solved
     outs = []
-    n = _samples_for(mode, 2, 1)
+    n = _samples_for(mode, 3, 2)
     for i in range(n):
-        outs.append(GENERAL.chat(
+        # thinking eats max_tokens from the inside: 640 leaves room for the
+        # answer after the think block (340 starved it to empty content)
+        o = GENERAL.chat(
             [{"role": "system", "content": LOGIC_DIRECT_SYS},
              {"role": "user", "content": prompt}],
-            max_tokens=340 if mode == "full" else 160,
-            thinking=(mode == "full"), temperature=0.6))
+            max_tokens=640 if mode == "full" else 200,
+            thinking=(mode == "full"), temperature=0.6)
+        if not o.strip():  # think-block starvation — retry without thinking
+            o = GENERAL.chat(
+                [{"role": "system", "content": LOGIC_DIRECT_SYS},
+                 {"role": "user", "content": prompt}],
+                max_tokens=200, thinking=False, temperature=0.6)
+        outs.append(o)
     best, agree = _majority_by_similarity(outs)
     conf = 0.7 if (n > 1 and agree >= 2) else (0.45 if best else 0.2)
     return Result(best, conf, esc_suffix=" State the answer in one sentence.",
@@ -582,7 +627,13 @@ def _logic_solver(prompt: str):
         attrs = [str(a) for a in spec.get("attributes", [])]
         cons = [str(c) for c in spec.get("constraints", [])]
         q_attr = spec.get("question_attribute")
-        if not entities or not attrs or len(entities) != len(attrs) or len(entities) > 6:
+        if not entities or not attrs or len(entities) > 6 or len(attrs) > 6:
+            return None
+        # partial-assignment puzzles name fewer people than attributes
+        # ("three houses, two named residents") — pad with placeholders
+        while len(entities) < len(attrs):
+            entities.append(f"_unnamed{len(entities)}")
+        if len(entities) != len(attrs):
             return None
         sols = []
         for perm in itertools.permutations(attrs):
@@ -595,15 +646,26 @@ def _logic_solver(prompt: str):
         if len(sols) != 1:
             return None
         A = sols[0]
+        named = {e: a for e, a in A.items() if not e.startswith("_unnamed")}
+        reason = "; ".join(f"{e} has the {a}" for e, a in named.items())
+        # "who has X?" questions
         if q_attr and q_attr in attrs:
-            who = next((e for e, a in A.items() if a == q_attr), None)
+            who = next((e for e, a in named.items() if a == q_attr), None)
             if who:
                 verb = _logic_verb(prompt)
-                reason = "; ".join(f"{e} has the {a}" for e, a in A.items())
                 return Result(f"{who} {verb} the {q_attr}. ({reason}.)", 0.92,
                               esc_suffix=" State the answer in one sentence.",
                               esc_max_tokens=200)
-        assign = ", ".join(f"{e}: {a}" for e, a in A.items())
+        # "which X does E have?" questions — entity named in the question
+        qsents = re.findall(r"[^.?!]*\?", prompt)
+        qsent = qsents[-1] if qsents else prompt
+        ent_in_q = next((e for e in named if re.search(
+            rf"\b{re.escape(e)}\b", qsent)), None)
+        if ent_in_q:
+            return Result(f"{ent_in_q} has the {A[ent_in_q]}. ({reason}.)", 0.9,
+                          esc_suffix=" State the answer in one sentence.",
+                          esc_max_tokens=200)
+        assign = ", ".join(f"{e}: {a}" for e, a in named.items())
         return Result(f"The unique solution is {assign}.", 0.85,
                       esc_suffix=" State the answer in one sentence.",
                       esc_max_tokens=200)
