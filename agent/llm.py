@@ -106,6 +106,17 @@ class LlamaServer:
             # sized for. _GEN_LOCK serializes all local generation anyway, so a
             # second slot would give zero concurrency benefit — keep it at 1.
             "--parallel", "1",
+            # memory-flat settings: the default host prompt cache (8 GiB!)
+            # ratchets RSS until the cgroup OOM-killer SIGKILLs the server
+            # mid-run (ggml-org/llama.cpp#22629) — the grader's 4 GB box
+            # killed exactly this way. Small batch/ubatch caps the compute
+            # buffer; q8_0 KV halves cache memory (needs flash attention).
+            "--cache-ram", "0",
+            "-b", "512",
+            "-ub", "128",
+            "-fa", "on",
+            "-ctk", "q8_0",
+            "-ctv", "q8_0",
         ]
         log(f"starting {self.name}: {' '.join(cmd)}")
         # keep stderr: if the grader kills us, the harness logs show why
@@ -242,17 +253,35 @@ def stop_all():
     CODER.stop()
 
 
+_WARMUP_FILLER = ("The quick brown fox jumps over the lazy dog near the old "
+                  "river bridge while morning fog settles across the valley "
+                  "and distant church bells mark the hour. ") * 24  # ~600 tok
+
+
 def probe_tps() -> float:
-    """Measure decode speed with a short fixed generation."""
-    t0 = time.monotonic()
+    """Full-size warmup workout, not a toy probe. A 48-token ping survives
+    conditions that kill real tasks (large-prompt compute buffers are what
+    spike memory) — so exercise a real-shaped prompt on BOTH servers before
+    trusting the local path."""
     try:
+        t0 = time.monotonic()
         GENERAL.chat(
-            [{"role": "user", "content": "Count from 1 to 30, comma separated."}],
+            [{"role": "system", "content": "Summarize the text in one sentence."},
+             {"role": "user", "content": _WARMUP_FILLER}],
+            max_tokens=64, temperature=0.0, timeout_s=120)
+        dt = time.monotonic() - t0
+        CODER.chat(
+            [{"role": "user", "content":
+              "Write a python function that adds two numbers. Code only."}],
             max_tokens=48, temperature=0.0, timeout_s=90)
     except Exception as e:
-        log(f"tps probe failed: {e}")
+        log(f"warmup workout failed: {e}")
         return 0.0
-    dt = time.monotonic() - t0
-    tps = 48.0 / dt if dt > 0 else 0.0
-    log(f"tps probe: ~{tps:.1f} tok/s")
+    if not (GENERAL.proc and GENERAL.proc.poll() is None):
+        log("general server died during warmup")
+        return 0.0
+    # decode-rate estimate from the general call (prompt+gen mixed; the
+    # governor thresholds were calibrated against this same measurement)
+    tps = 64.0 / max(dt - 3.0, 0.5)  # rough pp deduction; conservative
+    log(f"warmup workout OK: ~{tps:.1f} tok/s (both servers alive)")
     return tps

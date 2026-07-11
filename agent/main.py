@@ -9,7 +9,7 @@ import signal
 import sys
 import threading
 
-from . import config, fireworks, llm, pipelines
+from . import config, fireworks, lastresort, llm, pipelines
 from .classify import classify
 from .util import atomic_write_results, elapsed, log
 
@@ -279,6 +279,18 @@ def main() -> int:
             CONF[tid] = 0.85
             flush()
             log(f"last-ditch escalation rescued {tid}")
+
+    # zero-model floor: local dead AND budget gone — a deterministic lexicon/
+    # extractive/heuristic answer still beats fallback text for 3 categories
+    for tid, cat, prompt, _res in tasks_meta:
+        if CONF.get(tid, 0) >= 0.1:
+            continue
+        det = lastresort.answer(cat, prompt)
+        if det:
+            RESULTS[tid] = det
+            CONF[tid] = 0.15
+            flush()
+            log(f"zero-model floor answered {tid} ({cat})")
 
     flush()
     try:
