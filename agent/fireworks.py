@@ -100,6 +100,7 @@ def _request(body_base: dict, category: str, est: int):
     headers = _headers()
     for model in pick_models(category):
         body = dict(body_base, model=model)
+        body.pop("_minimal", None)  # internal retry marker — never send it
         data = json.dumps(body).encode()
         for url in _base_urls():
             try:
@@ -114,13 +115,26 @@ def _request(body_base: dict, category: str, est: int):
                 BUDGET.commit(est, actual)
                 return content, actual, model
             except urllib.error.HTTPError as e:
+                try:
+                    body = e.read().decode(errors="replace")[:300]
+                except Exception:  # noqa: BLE001
+                    body = "<unreadable>"
                 if e.code == 404:
                     continue  # wrong path or unknown model — next url, then next model
                 if e.code in (401, 403):
-                    log(f"escalation auth failure ({e.code}) — giving up")
+                    log(f"escalation auth failure ({e.code}): {body}")
                     BUDGET.refund(est)
                     return None, 0, None
-                log(f"escalation http {e.code} on {model.rsplit('/', 1)[-1]}")
+                log(f"escalation http {e.code} on {model.rsplit('/', 1)[-1]}: {body}")
+                if e.code == 400 and not body_base.get("_minimal"):
+                    # a proxy/model rejecting an optional param (reasoning_effort,
+                    # chat_template_kwargs, big max_tokens) must not kill the
+                    # call — retry this same model with a bare-minimum body
+                    slim = {"messages": body_base["messages"],
+                            "max_tokens": min(int(body_base.get("max_tokens", 300)), 700),
+                            "temperature": 0.2, "_minimal": True}
+                    log("retrying with parameter-minimal body")
+                    return _request(slim, category, est)
                 break  # server error on this model — try next model
             except Exception as e:  # noqa: BLE001
                 log(f"escalation error on {model.rsplit('/', 1)[-1]}: {e}")

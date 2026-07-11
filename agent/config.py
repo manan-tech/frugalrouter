@@ -39,7 +39,7 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # escalate everything (measured 95% via batches)
 TPS_DEAD = 8.5
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
-ESCALATION_TIMEOUT_S = 30
+ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
 
 # Per-category escalation caps: (reasoning_effort, max_tokens). Keeps remote
