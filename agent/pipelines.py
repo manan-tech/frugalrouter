@@ -592,7 +592,7 @@ def logic(prompt: str, mode: str) -> Result:
         if solved:
             return solved
     outs = []
-    n = _samples_for(mode, 3, 2)
+    n = _samples_for(mode, 2, 2)
     for i in range(n):
         # thinking eats max_tokens from the inside: 640 leaves room for the
         # answer after the think block (340 starved it to empty content)
@@ -622,6 +622,9 @@ def _logic_solver(prompt: str):
              {"role": "user", "content": prompt}],
             max_tokens=240, temperature=0.2)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        # models emit A["Sam"] != "bird" inside JSON strings — heal the quotes
+        raw = re.sub(r'A\[\s*"([^"\]]+)"\s*\]', r"A['\1']", raw)
+        raw = re.sub(r'(==|!=)\s*"([^",\]}]+)"(?=[\s,\]])', r"\1 '\2'", raw)
         spec = json.loads(raw)
         entities = [str(e) for e in spec.get("entities", [])]
         attrs = [str(a) for a in spec.get("attributes", [])]

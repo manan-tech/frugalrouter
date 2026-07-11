@@ -139,7 +139,7 @@ def main() -> int:
     # anytime loop: spend leftover wall-clock strengthening the weakest local answers
     if servers_ok and tps > 1.0:
         weak = sorted((t for t in tasks_meta
-                       if 0.05 < CONF.get(t[0], 0) < 0.78),
+                       if 0.05 < CONF.get(t[0], 0) < 0.70),
                       key=lambda t: CONF.get(t[0], 0))
         for tid, cat, prompt, _res in weak:
             if elapsed() > config.SOFT_NEW_WORK_S - 30:
