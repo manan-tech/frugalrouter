@@ -13,8 +13,8 @@ GENERAL_MODEL_PATH = "/models/general.gguf"   # Qwen3-1.7B Q4_K_M
 CODER_MODEL_PATH = "/models/coder.gguf"       # Qwen2.5-Coder-1.5B-Instruct Q4_K_M
 GENERAL_PORT = 8091
 CODER_PORT = 8092
-GENERAL_CTX = 1536
-CODER_CTX = 1536
+GENERAL_CTX = 2048   # long summarisation/NER passages must fit
+CODER_CTX = 1536     # code prompts are short; saves KV memory
 LLM_THREADS = 2
 SERVER_START_TIMEOUT_S = 60
 
@@ -27,7 +27,10 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # ---- escalation ----
 # Total Fireworks tokens we are willing to spend (input+output, from usage).
 # 0 => pure local zero-token mode.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "900"))
+# cap, not target: healthy runs spend ~400-700. Sized so that even a
+# harder-than-expected task set can escalate every weak answer and still
+# undercut the leaderboard's ~1,400-token top entries.
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "1300"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "4500"))
