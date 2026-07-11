@@ -60,11 +60,23 @@ def load_tasks():
     with open(config.INPUT_PATH, encoding="utf-8") as f:
         data = json.load(f)
     if isinstance(data, dict):
-        data = data.get("tasks", [])
+        data = (data.get("tasks") or data.get("data") or
+                data.get("questions") or [])
     tasks = []
     for item in data:
-        tid = str(item.get("task_id", f"t{len(tasks) + 1}"))
-        tasks.append((tid, str(item.get("prompt", ""))))
+        if not isinstance(item, dict):
+            continue
+        tid = str(item.get("task_id") or item.get("id")
+                  or item.get("taskId") or f"t{len(tasks) + 1}")
+        prompt = ""
+        for key in ("prompt", "question", "input", "text", "task", "query"):
+            val = item.get(key)
+            if isinstance(val, str) and val.strip():
+                prompt = val
+                break
+        if not prompt:
+            log(f"WARNING: no prompt-like field on task {tid}; keys={list(item)}")
+        tasks.append((tid, str(prompt)))
     return tasks
 
 
