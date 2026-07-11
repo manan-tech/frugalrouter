@@ -622,10 +622,16 @@ def _logic_solver(prompt: str):
              {"role": "user", "content": prompt}],
             max_tokens=240, temperature=0.2)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
-        # models emit A["Sam"] != "bird" inside JSON strings — heal the quotes
+        # models emit A["Sam"] != "bird" inside JSON strings — heal the quotes.
+        # the value's closing quote may butt directly against the constraint
+        # string's own closing quote, so `"` must be in the lookahead
         raw = re.sub(r'A\[\s*"([^"\]]+)"\s*\]', r"A['\1']", raw)
-        raw = re.sub(r'(==|!=)\s*"([^",\]}]+)"(?=[\s,\]])', r"\1 '\2'", raw)
-        spec = json.loads(raw)
+        raw = re.sub(r'(==|!=)\s*"([^",\]}]+)"(?=[\s,\]"}])', r"\1 '\2'", raw)
+        try:
+            spec = json.loads(raw)
+        except json.JSONDecodeError:
+            log(f"solver raw after heal: {raw[:220]!r}")
+            raise
         entities = [str(e) for e in spec.get("entities", [])]
         attrs = [str(a) for a in spec.get("attributes", [])]
         cons = [str(c) for c in spec.get("constraints", [])]
