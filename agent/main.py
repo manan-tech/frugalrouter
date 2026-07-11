@@ -91,6 +91,16 @@ def _esc_threshold(cat, override):
 
 
 def escalate_candidates(tasks_meta, threshold=None):
+    # mass-fallback promotion: if most answers are dead (conf<0.1), local
+    # inference failed in some way we didn't catch — the normal budget can
+    # only cover ~7 tasks and the gate dies at ~36% (v6's grader result).
+    # Gate survival outranks rank: unlock the emergency budget.
+    if tasks_meta:
+        dead = sum(1 for t in tasks_meta if CONF.get(t[0], 0) < 0.1)
+        if dead >= max(3, len(tasks_meta) // 2):
+            log(f"mass fallback detected ({dead}/{len(tasks_meta)} dead) — "
+                f"raising to emergency budget")
+            fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
     cands = [(tid, cat, prompt, res) for tid, cat, prompt, res in tasks_meta
              if CONF.get(tid, 0) < _esc_threshold(cat, threshold)]
     if not cands or config.ESCALATION_BUDGET_TOKENS <= 0:
@@ -184,6 +194,7 @@ def main() -> int:
     tasks_meta = []
     if local_usable:
         done = 0
+        dead_streak = 0  # v6 lesson: llama can die MID-RUN, after a healthy probe
         for i, (tid, cat, prompt) in enumerate(tasks_c):
             if elapsed() > config.SOFT_NEW_WORK_S - 25:
                 log(f"soft deadline — {len(tasks_c) - done} tasks go straight "
@@ -209,6 +220,19 @@ def main() -> int:
             log("CALIB " + json.dumps({"task_id": tid, "category": cat,
                                        "confidence": round(res.confidence, 3),
                                        "mode": mode}))
+            # conf <= 0.05 means even the crash-fallback direct call failed —
+            # that only happens when local inference itself is gone
+            dead_streak = dead_streak + 1 if res.confidence <= 0.05 else 0
+            if dead_streak >= 3:
+                log("LOCAL DIED MID-RUN (3 consecutive dead tasks) — "
+                    "emergency escalation for everything remaining")
+                fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
+                for tid2, cat2, prompt2 in tasks_c[i + 1:]:
+                    tasks_meta.append((tid2, cat2, prompt2,
+                                       pipelines.Result(_FALLBACK, 0.0,
+                                                        esc_max_tokens=300)))
+                local_usable = False  # skip the anytime loop too
+                break
     else:
         for tid, cat, prompt in tasks_c:
             tasks_meta.append((tid, cat, prompt,

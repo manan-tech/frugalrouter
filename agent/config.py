@@ -34,9 +34,10 @@ ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "1300"
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
-# below this, local quality/speed can't clear the gate — panic-grade local
-# answers score ~30%, so slow counts as dead and we escalate everything
-TPS_DEAD = 4.5
+# below this, local quality/speed can't clear the gate — panic/starved-lean
+# answers score ~30-60% (grader-measured), so slow counts as dead and we
+# escalate everything (measured 95% via batches)
+TPS_DEAD = 8.5
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 30
 ESCALATION_WORKERS = 4
