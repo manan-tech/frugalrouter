@@ -21,6 +21,8 @@ RUN mkdir -p /models && \
     ls -la /models
 
 FROM --platform=linux/amd64 python:3.12-slim
+LABEL org.opencontainers.image.source="https://github.com/manan-tech/frugalrouter" \
+      org.opencontainers.image.description="FrugalRouter - local-first token-efficient routing agent (AMD Hackathon ACT II Track 1)"
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 libcurl4 && \
     rm -rf /var/lib/apt/lists/*
 

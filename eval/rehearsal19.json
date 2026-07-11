@@ -1,0 +1,116 @@
+[
+ {
+  "task_id": "f1",
+  "category": "factual",
+  "prompt": "What is the capital of Canada, and on which river does it sit?",
+  "rubric": "Must say Ottawa AND the Ottawa River."
+ },
+ {
+  "task_id": "f2",
+  "category": "factual",
+  "prompt": "Which planet is known as the Red Planet, and what gives it that color?",
+  "rubric": "Must say Mars AND iron oxide (rust) on its surface."
+ },
+ {
+  "task_id": "f3",
+  "category": "factual",
+  "prompt": "What does HTTP stand for, and what is it used for?",
+  "rubric": "Must expand to HyperText Transfer Protocol AND say it is used to transfer web data/pages between clients and servers."
+ },
+ {
+  "task_id": "m1",
+  "category": "math",
+  "prompt": "A warehouse holds 480 boxes. It ships 25% of them on Monday and 90 more on Tuesday. How many boxes remain?",
+  "rubric": "Correct answer: 270."
+ },
+ {
+  "task_id": "m2",
+  "category": "math",
+  "prompt": "A phone costs $250. The price increases by 12%, then drops by $30. What is the final price?",
+  "rubric": "Correct answer: $250."
+ },
+ {
+  "task_id": "m5",
+  "category": "math",
+  "prompt": "A town of 8,000 people grows by 5% each year. What is the population after 2 years?",
+  "rubric": "Correct answer: 8,820."
+ },
+ {
+  "task_id": "s1",
+  "category": "sentiment",
+  "prompt": "Classify the sentiment of this review: The delivery was fast, but the packaging arrived completely crushed.",
+  "rubric": "Label mixed (or negative-leaning mixed) with a justification mentioning both the positive delivery speed and negative packaging. Pure 'positive' or 'neutral' is wrong."
+ },
+ {
+  "task_id": "s4",
+  "category": "sentiment",
+  "prompt": "Classify the sentiment of this statement: The manual states the device weighs 300 grams and ships with a USB cable.",
+  "rubric": "Label neutral (factual, no opinion) with a brief justification."
+ },
+ {
+  "task_id": "u1",
+  "category": "summary",
+  "prompt": "Summarize the following in exactly one sentence: The city council voted on Thursday to approve a new bike-lane network spanning twelve miles of downtown streets. Construction will begin in March and is expected to take eight months, funded by a state transportation grant. Business owners raised concerns about parking, but planners promised replacement lots within two blocks of every affected street.",
+  "rubric": "Exactly ONE sentence covering the council approving a downtown bike-lane network with construction timing/funding or parking concerns. Must be a single sentence."
+ },
+ {
+  "task_id": "u3",
+  "category": "summary",
+  "prompt": "Summarize the following in exactly two sentences: A regional airline announced it will retire its aging fleet of turboprop planes by next summer. The carrier plans to replace them with newer jets that burn less fuel and carry more passengers. Analysts note the move follows two years of losses on short regional routes. Employees were told that pilot retraining will be paid for by the company and no layoffs are planned.",
+  "rubric": "Exactly TWO sentences covering fleet retirement/replacement with efficient jets and the context (losses, retraining, no layoffs). Must be exactly two sentences."
+ },
+ {
+  "task_id": "n1",
+  "category": "ner",
+  "prompt": "Extract all named entities and their types from: Elon Chen presented Tesla's quarterly results in Austin on January 15th.",
+  "rubric": "Must identify Elon Chen (Person), Tesla (Organization), Austin (Location), January 15th (Date). Types must be sensible."
+ },
+ {
+  "task_id": "n2",
+  "category": "ner",
+  "prompt": "Extract all named entities and their types from: Dr. Priya Nair flew from Mumbai to Geneva for the WHO summit in June.",
+  "rubric": "Must identify Priya Nair (Person), Mumbai (Location), Geneva (Location), WHO (Organization), June (Date)."
+ },
+ {
+  "task_id": "d2",
+  "category": "code_debug",
+  "prompt": "This function should count the vowels in a string but has a bug: def count_vowels(s): return len([c for c in s if c in 'AEIOU']). Find and fix it.",
+  "rubric": "Must identify the case-sensitivity bug and fix by lowercasing input or checking both cases."
+ },
+ {
+  "task_id": "d5",
+  "category": "code_debug",
+  "prompt": "This function should compute the factorial of n but has a bug: def fact(n): return n * fact(n - 1). Find and fix it.",
+  "rubric": "Must identify the missing base case (infinite recursion) and add one (n <= 1 returns 1)."
+ },
+ {
+  "task_id": "l2",
+  "category": "logic",
+  "prompt": "Four kids \u2014 Mia, Noah, Ava, and Eli \u2014 each play a different sport: soccer, tennis, chess, or swimming. Mia plays neither soccer nor chess. Noah plays tennis. Ava plays chess. What does Mia play?",
+  "rubric": "Correct answer: swimming."
+ },
+ {
+  "task_id": "l5",
+  "category": "logic",
+  "prompt": "Each of three shelves \u2014 top, middle, and bottom \u2014 holds a different item: books, plants, or trophies. The top shelf does not hold plants. The middle shelf holds books. Which shelf holds the plants?",
+  "rubric": "Correct answer: the bottom shelf."
+ },
+ {
+  "task_id": "g1",
+  "category": "code_gen",
+  "prompt": "Write a Python function that returns the third-smallest number in a list, handling duplicates correctly.",
+  "rubric": "Working Python function returning the third-smallest distinct value (or clearly reasonable duplicate handling). Code must be syntactically valid and logically correct."
+ },
+ {
+  "task_id": "g2",
+  "category": "code_gen",
+  "prompt": "Write a Python function that checks whether a string is a palindrome, ignoring case and spaces.",
+  "rubric": "Working function that normalizes case and removes spaces before comparing with its reverse."
+ },
+ {
+  "task_id": "g4",
+  "category": "code_gen",
+  "prompt": "Write a Python function that merges two sorted lists into one sorted list without using sort().",
+  "rubric": "Working two-pointer (or equivalent) merge that does not call sort/sorted."
+ }
+]

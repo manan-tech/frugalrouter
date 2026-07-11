@@ -48,7 +48,11 @@ def factual(prompt: str, mode: str) -> Result:
              {"role": "user", "content": prompt}],
             max_tokens=90, temperature=0.3 if i == 0 else config.GEN_TEMP))
     best, agree = _majority_by_similarity(outs)
-    conf = {3: 0.85, 2: 0.7, 1: 0.35 if n > 1 else 0.5}.get(agree, 0.5)
+    # sample agreement cannot verify facts — a small model is confidently
+    # wrong too often. Cap below the escalation threshold: factual always
+    # escalates when budget allows (cheapest category to fix remotely),
+    # and the local majority answer stands as the fallback.
+    conf = {3: 0.50, 2: 0.45, 1: 0.30}.get(agree, 0.40)
     return Result(best, conf, esc_suffix=" Answer briefly.", esc_max_tokens=160)
 
 
@@ -275,10 +279,26 @@ def ner(prompt: str, mode: str) -> Result:
         return Result("None", 0.4, esc_max_tokens=200)
     seen, lines = set(), []
     for e, t in base:
+        e = _expand_span(e, prompt)
         if e.lower() not in seen:
             seen.add(e.lower())
             lines.append(f"{e} | {t}")
     return Result("\n".join(lines), conf, esc_max_tokens=200)
+
+
+_QUALIFIERS = r"(?:last|this|next|early|late|mid|summer|winter|spring|fall|autumn|dr\.?|mr\.?|mrs\.?|ms\.?|president|professor|prof\.?)"
+
+
+def _expand_span(entity: str, text: str) -> str:
+    """Small models clip entity spans ('2024' for 'summer 2024'). Greedily
+    re-attach immediately-preceding qualifier words found in the source."""
+    for _ in range(2):
+        m = re.search(r"\b(" + _QUALIFIERS + r")\s+" + re.escape(entity),
+                      text, re.IGNORECASE)
+        if not m:
+            break
+        entity = text[m.start(1):m.start(1) + len(m.group(1))] + " " + entity
+    return entity
 
 
 # --------------------------------------------------------------------------
@@ -453,15 +473,29 @@ DEBUG_FIX_SYS = ("You are given code with a bug and its intended behavior. "
                  "block. No explanations.")
 
 
+DEBUG_DIFF_SYS = ("Compare the original buggy code with the corrected code and "
+                  "state in ONE short sentence what the bug was. Start with "
+                  "'Bug:'. No code.")
+
+
+def _bug_line_from_diff(prompt: str, fixed_code: str) -> str:
+    """Describe the bug AFTER fixing — grounded by the actual before/after
+    diff, not guessed up front (guessing produced confident nonsense)."""
+    try:
+        bug = CODER.chat(
+            [{"role": "system", "content": DEBUG_DIFF_SYS},
+             {"role": "user", "content":
+              f"{prompt}\n\nCorrected code:\n```python\n{fixed_code}\n```"}],
+            max_tokens=60, temperature=0.2)
+        line = bug.strip().splitlines()[0] if bug.strip() else ""
+        if line and not line.startswith("Bug:"):
+            line = "Bug: " + line
+        return line
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def code_debug(prompt: str, mode: str) -> Result:
-    # small models are unreliable at "sentence then code" combos — split calls
-    bug = CODER.chat(
-        [{"role": "system", "content": DEBUG_BUG_SYS},
-         {"role": "user", "content": prompt}],
-        max_tokens=60, temperature=0.2)
-    bug_line = bug.strip().splitlines()[0] if bug.strip() else ""
-    if bug_line and not bug_line.startswith("Bug:"):
-        bug_line = "Bug: " + bug_line
     code = ""
     out = ""
     for temp in (config.CODE_TEMP, 0.6):
@@ -473,11 +507,10 @@ def code_debug(prompt: str, mode: str) -> Result:
         if code and "def " in code:
             break
     if not code or "def " not in code:
-        return Result((bug_line + "\n" + out).strip() or "Unable to determine.",
-                      0.3, esc_max_tokens=400)
-    preamble = bug_line or "Bug: see corrected code below."
+        return Result(out.strip() or "Unable to determine.", 0.3, esc_max_tokens=400)
     if mode == "panic":
-        return Result(_code_answer(preamble, code), 0.5, esc_max_tokens=400)
+        bug = _bug_line_from_diff(prompt, code) or "Bug: see corrected code below."
+        return Result(_code_answer(bug, code), 0.5, esc_max_tokens=400)
 
     # cross-check the fix against an independent from-scratch implementation
     # of the described intent (same name/signature), by observed behavior
@@ -489,9 +522,13 @@ def code_debug(prompt: str, mode: str) -> Result:
         ref = ""  # different name — behavior comparison would be meaningless
     verified = _behavior_verify(prompt, [code, ref], inputs_code) if ref else None
     if verified:
-        return Result(_code_answer(preamble, verified[0]), verified[1],
-                      esc_max_tokens=400)
-    return _verify_and_repair(prompt, code, mode, esc_max=400, preamble=preamble)
+        best_code, conf = verified
+        bug = _bug_line_from_diff(prompt, best_code) or "Bug: see corrected code below."
+        return Result(_code_answer(bug, best_code), conf, esc_max_tokens=400)
+    res = _verify_and_repair(prompt, code, mode, esc_max=400)
+    final_code = extract_code(res.answer) or code
+    bug = _bug_line_from_diff(prompt, final_code) or "Bug: see corrected code below."
+    return Result(_code_answer(bug, final_code), res.confidence, esc_max_tokens=400)
 
 
 # --------------------------------------------------------------------------

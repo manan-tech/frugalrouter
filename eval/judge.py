@@ -15,10 +15,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 BASE = "https://api.fireworks.ai/inference/v1/chat/completions"
 JUDGE_MODELS = [
-    "accounts/fireworks/models/kimi-k2p6",
-    "accounts/fireworks/models/deepseek-v4-pro",
-    "accounts/fireworks/models/glm-5p2",
     "accounts/fireworks/models/gpt-oss-120b",
+    "accounts/fireworks/models/deepseek-v4-pro",
+    "accounts/fireworks/models/kimi-k2p6",
+    "accounts/fireworks/models/glm-5p2",
 ]
 
 JUDGE_PROMPT = """You are grading an AI agent's answer against the expected intent.
@@ -51,7 +51,7 @@ def judge_one(key, model, task, answer):
         "model": model,
         "messages": [{"role": "user", "content": JUDGE_PROMPT.format(
             prompt=task["prompt"], rubric=task["rubric"], answer=answer or "(empty)")}],
-        "max_tokens": 700,
+        "max_tokens": 1000,
         "temperature": 0.0,
         "reasoning_effort": "low",
     }
