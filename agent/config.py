@@ -41,6 +41,26 @@ ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 30
 ESCALATION_WORKERS = 4
 
+# Per-category escalation caps: (reasoning_effort, max_tokens). Keeps remote
+# spend tight — every category runs low reasoning; token ceilings scale with
+# how verbose a correct answer needs to be (code needs the most).
+ESC_CAPS = {
+    "factual": ("low", 300),
+    "sentiment": ("low", 200),
+    "ner": ("low", 250),
+    "summary": ("low", 500),
+    "math": ("low", 400),
+    "logic": ("low", 400),
+    "code_gen": ("low", 900),
+    "code_debug": ("low", 900),
+}
+# Per-category escalation-confidence thresholds. Defaults to the global
+# ESCALATE_CONF_THRESHOLD for every category; calibration overwrites these
+# later. Kept in sync with ESC_CAPS keys.
+CATEGORY_THRESHOLDS = {cat: ESCALATE_CONF_THRESHOLD for cat in ESC_CAPS}
+# Batch multiple escalation questions into one remote chat when possible.
+BATCH_ESCALATION = True
+
 # Strong serverless models, ranked by measured total-token frugality on a
 # representative escalation (verified live 2026-07-11: gpt-oss-120b w/
 # reasoning_effort=low → 137 tok; glm-5p2 → 165; kimi-k2p6 → 180;
@@ -58,6 +78,9 @@ FALLBACK_MODELS = [
 GEMMA_HINT = "gemma"
 
 # ---- sampling ----
+# Self-consistency sampling (diverse local samples for majority voting).
+SC_TEMP = 0.9
+SC_MIN_P = 0.07
 GEN_TEMP = 0.7
 GEN_TOP_P = 0.8
 GEN_TOP_K = 20
@@ -71,3 +94,14 @@ TPS_LEAN = 5.0    # >=: lean (2 samples max, thinking only for logic)
                   # <: panic (single-sample, no thinking, escalate weakest)
 
 MAX_LOCAL_RETRIES = 2
+
+# ---- local-eval test/calibration hooks (grading harness never sets these;
+# baked-in defaults keep them inert in production) ----
+# "1" => pretend local inference is dead and take the emergency
+# escalate-everything path (CI knob: eval.yml force_emergency input).
+TEST_FORCE_EMERGENCY = os.environ.get("TEST_FORCE_EMERGENCY", "0") == "1"
+# Non-empty => append one JSONL record per scored task:
+#   {"task_id", "category", "confidence", "signals"}
+# Join judge results as "judge_pass" to build the records eval/calibrate.py
+# consumes. Empty (default) disables all signal capture and logging.
+CALIBRATION_LOG_PATH = os.environ.get("CALIBRATION_LOG_PATH", "")

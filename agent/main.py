@@ -22,6 +22,24 @@ def flush():
     atomic_write_results(config.OUTPUT_PATH, RESULTS)
 
 
+def emit_calibration(tid, cat, res):
+    """Local-eval calibration producer — no-op unless CALIBRATION_LOG_PATH is
+    set (the grading harness never sets it). Emits the agent-side half of the
+    eval/calibrate.py record; join judge.py pass/fail as "judge_pass" before
+    running calibration. Signals come from llm.LAST_SIGNALS (the most recent
+    local completion for this task)."""
+    if not config.CALIBRATION_LOG_PATH:
+        return
+    try:
+        rec = {"task_id": tid, "category": cat,
+               "confidence": res.confidence,
+               "signals": dict(llm.LAST_SIGNALS)}
+        with open(config.CALIBRATION_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception as e:  # noqa: BLE001 — logging must never break the run
+        log(f"calibration log error: {e}")
+
+
 def watchdog():
     import time
     flushed = False
@@ -63,32 +81,67 @@ def pick_mode(tps: float, tasks_left: int) -> str:
     return order[i]
 
 
+def _esc_threshold(cat, override):
+    """Per-category escalation threshold, unless an explicit override is given
+    (second pass / emergency reuse the single caller-supplied value)."""
+    if override is not None:
+        return override
+    thr = getattr(config, "CATEGORY_THRESHOLDS", None) or {}
+    return thr.get(cat, config.ESCALATE_CONF_THRESHOLD)
+
+
 def escalate_candidates(tasks_meta, threshold=None):
-    threshold = threshold if threshold is not None else config.ESCALATE_CONF_THRESHOLD
     cands = [(tid, cat, prompt, res) for tid, cat, prompt, res in tasks_meta
-             if CONF.get(tid, 0) < threshold]
+             if CONF.get(tid, 0) < _esc_threshold(cat, threshold)]
     if not cands or config.ESCALATION_BUDGET_TOKENS <= 0:
         if cands:
             log(f"{len(cands)} weak tasks but escalation budget is 0 — staying local")
         return
-    # cheapest-estimated-first, sequentially: actual spend (not max_tokens
-    # reservations) gates later calls, maximizing tasks fixed per budget
-    cands.sort(key=lambda c: fireworks.est_tokens(c[2]) + c[3].esc_max_tokens)
-    log(f"escalating {len(cands)} weak tasks, cheapest first "
-        f"(budget {fireworks.BUDGET.spent}/{fireworks.BUDGET.total})")
-    for tid, cat, prompt, res in cands:
+    # group by category: same-category weak questions ride one batched call
+    # (byte-stable prefix -> cache-friendly). Cheapest category first, and
+    # cheapest member first within it, so the shared budget fixes the most.
+    groups = {}
+    for cand in cands:
+        groups.setdefault(cand[1], []).append(cand)
+    for members in groups.values():
+        members.sort(key=lambda c: fireworks.est_tokens(c[2]) + c[3].esc_max_tokens)
+    ordered = sorted(groups.values(),
+                     key=lambda ms: sum(fireworks.est_tokens(c[2]) + c[3].esc_max_tokens
+                                        for c in ms) / len(ms))
+    batch_on = getattr(config, "BATCH_ESCALATION", True)
+    log(f"escalating {len(cands)} weak tasks in {len(ordered)} category groups, "
+        f"cheapest first (budget {fireworks.BUDGET.spent}/{fireworks.BUDGET.total})")
+    for members in ordered:
         if elapsed() > config.FLUSH_S - 15:
             break
-        ans, _spent = fireworks.chat(prompt + res.esc_suffix, cat,
-                                     max_tokens=res.esc_max_tokens)
-        if ans and ans.strip():
-            RESULTS[tid] = ans.strip()
-            CONF[tid] = 0.88
+        cat = members[0][1]
+        if batch_on and len(members) >= 2:
+            # keep each member's category-specific format hint (esc_suffix) —
+            # exact-match judging depends on it, same as the single-item path
+            answers = fireworks.batch_chat([(tid, prompt + res.esc_suffix)
+                                            for tid, _c, prompt, res in members],
+                                           cat)
+            for tid, _c, _p, _r in members:
+                ans = answers.get(tid)
+                if ans and ans.strip():
+                    RESULTS[tid] = ans.strip()
+                    CONF[tid] = 0.88
             flush()
+        else:
+            for tid, _c, prompt, res in members:
+                if elapsed() > config.FLUSH_S - 15:
+                    break
+                ans, _spent = fireworks.chat(prompt + res.esc_suffix, cat,
+                                             max_tokens=res.esc_max_tokens)
+                if ans and ans.strip():
+                    RESULTS[tid] = ans.strip()
+                    CONF[tid] = 0.88
+                    flush()
 
 
 def main() -> int:
     log("FrugalRouter starting")
+    llm.CAPTURE_SIGNALS = bool(config.CALIBRATION_LOG_PATH)  # local eval only
     threading.Thread(target=watchdog, daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: (flush(), os._exit(0)))
 
@@ -117,6 +170,11 @@ def main() -> int:
     log("categories: " + ", ".join(f"{tid}={cat}" for tid, cat, _ in tasks_c))
 
     local_usable = servers_ok and tps >= config.TPS_DEAD
+    if config.TEST_FORCE_EMERGENCY:
+        # local-eval test hook (eval.yml force_emergency): exercise the
+        # emergency escalate-all path exactly as a dead local would
+        log("TEST_FORCE_EMERGENCY=1 — forcing emergency escalate-all path")
+        local_usable = False
     if not local_usable:
         # gate survival outranks token rank: answer everything via Fireworks
         log(f"LOCAL PATH UNAVAILABLE (servers_ok={servers_ok}, tps={tps:.1f}) "
@@ -142,6 +200,7 @@ def main() -> int:
             RESULTS[tid] = res.answer or _FALLBACK
             CONF[tid] = res.confidence
             tasks_meta.append((tid, cat, prompt, res))
+            emit_calibration(tid, cat, res)
             flush()
             done += 1
             log(f"[{done}/{len(tasks_c)}] {tid} ({cat}, {mode}) conf={res.confidence:.2f}")

@@ -5,6 +5,7 @@ generation so the 2 vCPUs are never oversubscribed. cache_prompt=True lets
 same-category tasks reuse the shared prompt prefix."""
 
 import json
+import math
 import subprocess
 import threading
 import time
@@ -15,6 +16,70 @@ from . import config
 from .util import log, strip_think
 
 _GEN_LOCK = threading.Lock()  # one local generation at a time, ever
+
+# Calibration capture (local eval only): when True, every local completion
+# requests logprobs and stashes its confidence signals in LAST_SIGNALS so
+# main.py can emit calibration JSONL records without any pipeline plumbing.
+# Enabled by main() iff config.CALIBRATION_LOG_PATH is set; the grading
+# harness never sets it, so production requests stay byte-identical.
+CAPTURE_SIGNALS = False
+LAST_SIGNALS = {}  # signals from the most recent local completion (mutated in place)
+
+# Number of top-logprob alternatives requested per position; also the fixed k
+# used by _extract_signals' self_certainty ("relative to uniform over top-k").
+_TOP_LOGPROBS_K = 5
+
+
+def _extract_signals(choice) -> dict:
+    """Compute confidence signals from a choice's per-token logprobs.
+
+    Returns {"mean_logprob", "min_token_margin", "self_certainty"}, each None
+    when the underlying data is unavailable (older server, empty generation).
+
+    - mean_logprob:    mean of the chosen token logprobs across positions.
+    - min_token_margin: min over positions of (top1.logprob - top2.logprob),
+                        i.e. the least-decisive token step in the output.
+    - self_certainty:  mean over positions of the top-1 probability expressed
+                        relative to a uniform distribution over the top-k
+                        requested (top1_prob / (1/k) == top1_prob * k, with
+                        k fixed at _TOP_LOGPROBS_K); 1.0 means "no better than
+                        uniform", larger means more peaked. k is fixed (not the
+                        observed alternative count) so the signal stays
+                        consistent even at truncated/end-of-vocab positions.
+    """
+    empty = {"mean_logprob": None, "min_token_margin": None,
+             "self_certainty": None}
+    lp = choice.get("logprobs") if isinstance(choice, dict) else None
+    entries = lp.get("content") if isinstance(lp, dict) else None
+    if not entries:
+        return empty
+
+    chosen_logprobs = []
+    margins = []
+    certainties = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        clp = entry.get("logprob")
+        if isinstance(clp, (int, float)):
+            chosen_logprobs.append(float(clp))
+        top = entry.get("top_logprobs") or []
+        # keep only well-formed alternatives, sorted most-probable first
+        alts = [a.get("logprob") for a in top
+                if isinstance(a, dict) and isinstance(a.get("logprob"), (int, float))]
+        alts = sorted((float(x) for x in alts), reverse=True)
+        if len(alts) >= 2:
+            margins.append(alts[0] - alts[1])
+        if alts:
+            certainties.append(math.exp(alts[0]) * _TOP_LOGPROBS_K)
+
+    return {
+        "mean_logprob": (sum(chosen_logprobs) / len(chosen_logprobs)
+                         if chosen_logprobs else None),
+        "min_token_margin": min(margins) if margins else None,
+        "self_certainty": (sum(certainties) / len(certainties)
+                           if certainties else None),
+    }
 
 
 class LlamaServer:
@@ -35,6 +100,11 @@ class LlamaServer:
             "--host", "127.0.0.1",
             "--jinja",
             "--no-webui",
+            # --parallel 1: llama.cpp splits -c across slots (per-slot ctx =
+            # -c / parallel), so --parallel 2 would halve usable context to
+            # 1024 and break the long summary/NER passages GENERAL_CTX=2048 was
+            # sized for. _GEN_LOCK serializes all local generation anyway, so a
+            # second slot would give zero concurrency benefit — keep it at 1.
             "--parallel", "1",
         ]
         log(f"starting {self.name}: {' '.join(cmd)}")
@@ -72,9 +142,20 @@ class LlamaServer:
             self.proc.terminate()
 
     def chat(self, messages, max_tokens=160, temperature=None, top_p=None,
-             top_k=None, grammar=None, thinking=False, timeout_s=120.0) -> str:
-        """Blocking chat completion against this local server. Returns content
-        with any <think> block stripped. Raises on failure after one retry."""
+             top_k=None, grammar=None, thinking=False, timeout_s=120.0,
+             min_p=None, return_signals=False):
+        """Blocking chat completion against this local server.
+
+        Returns content with any <think> block stripped. Raises on failure
+        after one retry.
+
+        min_p (float|None): passed through to llama-server as "min_p" when set.
+        return_signals (bool): when True, requests token logprobs and returns a
+            tuple (content, signals) instead of a plain string, where signals =
+            {"mean_logprob", "min_token_margin", "self_certainty"} (any value may
+            be None if logprobs were unavailable). Default False keeps the plain
+            string return for backwards compatibility.
+        """
         body = {
             "messages": messages,
             "max_tokens": max_tokens,
@@ -86,8 +167,15 @@ class LlamaServer:
             "cache_prompt": True,
             "chat_template_kwargs": {"enable_thinking": bool(thinking)},
         }
+        if min_p is not None:
+            body["min_p"] = min_p
         if grammar:
             body["grammar"] = grammar
+        if return_signals or CAPTURE_SIGNALS:
+            # llama-server's OpenAI-compat endpoint returns per-token logprobs
+            # with the top-k alternatives at each position.
+            body["logprobs"] = True
+            body["top_logprobs"] = _TOP_LOGPROBS_K
         data = json.dumps(body).encode()
         url = f"http://127.0.0.1:{self.port}/v1/chat/completions"
         last_err = None
@@ -98,9 +186,16 @@ class LlamaServer:
                         url, data=data, headers={"Content-Type": "application/json"})
                     with urllib.request.urlopen(req, timeout=timeout_s) as r:
                         resp = json.loads(r.read().decode())
-                msg = resp["choices"][0]["message"]
-                content = msg.get("content") or ""
-                return strip_think(content)
+                choice = resp["choices"][0]
+                msg = choice["message"]
+                content = strip_think(msg.get("content") or "")
+                if return_signals or CAPTURE_SIGNALS:
+                    signals = _extract_signals(choice)
+                    LAST_SIGNALS.clear()
+                    LAST_SIGNALS.update(signals)
+                    if return_signals:
+                        return content, signals
+                return content
             except Exception as e:  # noqa: BLE001 — never let a task die silently
                 last_err = e
                 log(f"{self.name} chat error (attempt {attempt}): {e}")

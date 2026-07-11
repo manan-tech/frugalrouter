@@ -17,6 +17,12 @@ on:
       budget:
         description: "ESCALATION_BUDGET_TOKENS"
         default: "900"
+      cpus:
+        description: "docker --cpus"
+        default: "2"
+      force_emergency:
+        description: "TEST_FORCE_EMERGENCY (1 = force emergency escalate-all path)"
+        default: "0"
 
 jobs:
   eval:
@@ -49,13 +55,14 @@ jobs:
           json.dump(slim, open(sys.argv[2], "w"), indent=1)
           EOF
           START=$(date +%s)
-          docker run --rm --cpus=2 --memory=4g --memory-swap=4g \
+          docker run --rm --cpus=${{ inputs.cpus }} --memory=4g --memory-swap=4g \
             -e FIREWORKS_API_KEY \
             -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
             -e SOFT_NEW_WORK_S=${{ inputs.soft_s }} \
             -e FLUSH_S=${{ inputs.flush_s }} \
             -e HARD_EXIT_S=${{ inputs.hard_s }} \
             -e ESCALATION_BUDGET_TOKENS=${{ inputs.budget }} \
+            -e TEST_FORCE_EMERGENCY=${{ inputs.force_emergency }} \
             -v "$PWD/work/input:/input:ro" \
             -v "$PWD/output:/output" \
             frugalrouter:ci 2>&1 | tee agent.log

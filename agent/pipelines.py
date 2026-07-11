@@ -46,14 +46,20 @@ def factual(prompt: str, mode: str) -> Result:
         outs.append(GENERAL.chat(
             [{"role": "system", "content": FACTUAL_SYS},
              {"role": "user", "content": prompt}],
-            max_tokens=90, temperature=0.3 if i == 0 else config.GEN_TEMP))
+            max_tokens=90,
+            temperature=0.3 if i == 0 else config.SC_TEMP,
+            min_p=None if i == 0 else config.SC_MIN_P))
     best, agree = _majority_by_similarity(outs)
     # sample agreement cannot verify facts — a small model is confidently
     # wrong too often. Cap below the escalation threshold: factual always
     # escalates when budget allows (cheapest category to fix remotely),
     # and the local majority answer stands as the fallback.
     conf = {3: 0.50, 2: 0.45, 1: 0.30}.get(agree, 0.40)
-    return Result(best, conf, esc_suffix=" Answer briefly.", esc_max_tokens=160)
+    return Result(best, conf,
+                  esc_suffix=(" Lead with the direct answer covering every "
+                              "part asked; one short sentence per part; "
+                              "no hedging."),
+                  esc_max_tokens=160)
 
 
 def _majority_by_similarity(outs):
@@ -78,13 +84,13 @@ MATH_FEWSHOT_U = ("A shop has 100 apples and sells 20% of them. How many are lef
 MATH_FEWSHOT_A = "```python\ntotal = 100\nsold = total * 20 / 100\nprint(total - sold)\n```"
 
 
-def _math_via_code(prompt: str, temp: float):
+def _math_via_code(prompt: str, temp: float, min_p=None):
     out = CODER.chat(
         [{"role": "system", "content": MATH_SYS},
          {"role": "user", "content": MATH_FEWSHOT_U},
          {"role": "assistant", "content": MATH_FEWSHOT_A},
          {"role": "user", "content": prompt}],
-        max_tokens=220, temperature=temp)
+        max_tokens=220, temperature=temp, min_p=min_p)
     code = extract_code(out)
     if not code:
         return None
@@ -94,11 +100,17 @@ def _math_via_code(prompt: str, temp: float):
     return extract_last_number(stdout)
 
 
+_BOXED_RE = re.compile(r"\\boxed\{([^}]+)\}")
+
+
 def math(prompt: str, mode: str) -> Result:
-    temps = [0.2, 0.7, 1.0] if mode != "panic" else [0.2]
+    # first/primary sample stays cold; extra diverse samples use the
+    # self-consistency sampling profile (SC_TEMP + SC_MIN_P)
+    plans = ([(0.2, None), (config.SC_TEMP, config.SC_MIN_P)]
+             if mode != "panic" else [(0.2, None)])
     vals = []
-    for t in temps[:2]:
-        v = _math_via_code(prompt, t)
+    for t, mp in plans:
+        v = _math_via_code(prompt, t, min_p=mp)
         if v is not None:
             vals.append(v)
         if len(vals) == 2 and abs(vals[0] - vals[1]) < 1e-9:
@@ -108,14 +120,22 @@ def math(prompt: str, mode: str) -> Result:
         return Result(_math_answer(vals[0]), 0.55,
                       esc_suffix=" Give only the final number.", esc_max_tokens=160)
     # tie-break: third code sample + a direct general-model answer
-    v3 = _math_via_code(prompt, temps[-1]) if mode != "panic" else None
+    v3 = (_math_via_code(prompt, config.SC_TEMP, min_p=config.SC_MIN_P)
+          if mode != "panic" else None)
     if v3 is not None:
         vals.append(v3)
     direct = GENERAL.chat(
-        [{"role": "system", "content": "Solve step by step, then give the final number."},
+        [{"role": "system", "content":
+          "Solve step by step, then give the final number. "
+          "Put your final answer within \\boxed{}."},
          {"role": "user", "content": prompt}],
         max_tokens=560 if mode == "full" else 280, thinking=(mode == "full"))
-    dv = extract_last_number(direct)
+    dv = None
+    boxed = _BOXED_RE.search(direct)
+    if boxed:
+        dv = extract_last_number(boxed.group(1))
+    if dv is None:
+        dv = extract_last_number(direct)
     if dv is not None:
         vals.append(dv)
     if not vals:
@@ -159,7 +179,8 @@ def sentiment(prompt: str, mode: str) -> Result:
         o3 = GENERAL.chat(
             [{"role": "system", "content": SENTIMENT_SYS},
              {"role": "user", "content": prompt}],
-            max_tokens=70, temperature=0.9, grammar=SENTIMENT_GRAMMAR)
+            max_tokens=70, temperature=config.SC_TEMP,
+            min_p=config.SC_MIN_P, grammar=SENTIMENT_GRAMMAR)
         outs.append(o3)
         m = _LABEL_RE.match(o3.strip())
         labels.append(m.group(1).title() if m else "?")
@@ -255,7 +276,9 @@ def ner(prompt: str, mode: str) -> Result:
         o = GENERAL.chat(
             [{"role": "system", "content": NER_SYS},
              {"role": "user", "content": prompt}],
-            max_tokens=110, temperature=0.15 if i == 0 else 0.7)
+            max_tokens=110,
+            temperature=0.15 if i == 0 else config.SC_TEMP,
+            min_p=None if i == 0 else config.SC_MIN_P)
         pairs = [(m.group(1).strip(), m.group(2).title())
                  for m in _NER_LINE.finditer(o)]
         parsed.append(pairs)
@@ -394,11 +417,11 @@ def _signature_of(code: str) -> str:
     return m.group(0) if m else "unknown"
 
 
-def _gen_impl(prompt: str, temp: float) -> str:
+def _gen_impl(prompt: str, temp: float, min_p=None) -> str:
     out = CODER.chat(
         [{"role": "system", "content": CODEGEN_SYS},
          {"role": "user", "content": prompt}],
-        max_tokens=380, temperature=temp)
+        max_tokens=380, temperature=temp, min_p=min_p)
     code = extract_code(out)
     return code if code and "def " in code else ""
 
@@ -415,7 +438,7 @@ def code_gen(prompt: str, mode: str) -> Result:
     # behavioral cross-verification: two independent impls must agree on
     # observed outputs (asserts with model-guessed expected values are the
     # thing that fails — inputs alone are easy to generate correctly)
-    impl_b = _gen_impl(prompt, 0.75)
+    impl_b = _gen_impl(prompt, config.SC_TEMP, min_p=config.SC_MIN_P)
     inputs_code = _gen_inputs(prompt, _signature_of(impl_a))
     verified = _behavior_verify(prompt, [impl_a, impl_b], inputs_code)
     if verified:
@@ -429,6 +452,40 @@ def code_gen(prompt: str, mode: str) -> Result:
     return _verify_and_repair(prompt, impl_a, mode, esc_max=400)
 
 
+_ASSERT_EQ_RE = re.compile(r"^assert\s+(.+?)\s*==\s*(.+)$")
+
+
+def _failure_detail(code: str, tests: str) -> str:
+    """Find the first failing assert, then run the candidate on that call to
+    capture the actual traceback/observed output. Returns an observed-vs-
+    expected line for the repair prompt, or '' if nothing parseable failed."""
+    try:
+        for line in tests.splitlines():
+            line = line.strip()
+            if not line.startswith("assert"):
+                continue
+            ok, _out, _err = run_python(f"{code}\n{line}\n")
+            if ok:
+                continue
+            m = _ASSERT_EQ_RE.match(line)
+            if not m:
+                return ""
+            call_expr, expected = m.group(1).strip(), m.group(2).strip()
+            ok2, out, err = run_python(f"{code}\nprint(repr({call_expr}))\n")
+            if ok2:
+                observed = out.strip() or "no output"
+            else:
+                tb = err.strip().splitlines()
+                observed = tb[-1] if tb else "crashed with no traceback"
+            im = re.match(r"\w+\((.*)\)$", call_expr, re.DOTALL)
+            failing_input = im.group(1) if im else call_expr
+            return (f"Failing input: {failing_input}; "
+                    f"expected (from tests): {expected}; observed: {observed}")
+    except Exception as e:  # noqa: BLE001 — diagnostics must never break repair
+        log(f"failure-detail probe failed: {e}")
+    return ""
+
+
 def _verify_and_repair(spec: str, code: str, mode: str, esc_max: int,
                        preamble: str = "") -> Result:
     tests = _gen_tests(spec, _signature_of(code))
@@ -438,6 +495,9 @@ def _verify_and_repair(spec: str, code: str, mode: str, esc_max: int,
     attempts = 0
     while not ok and attempts < config.MAX_LOCAL_RETRIES and mode != "panic":
         attempts += 1
+        detail = _failure_detail(code, tests)
+        if detail:
+            err = f"{err}\n{detail}" if err else detail
         fix = CODER.chat(
             [{"role": "system", "content": CODEGEN_SYS},
              {"role": "user", "content":
@@ -614,13 +674,25 @@ def logic(prompt: str, mode: str) -> Result:
 
 
 def _logic_solver(prompt: str):
+    res, status = _logic_solve_once(prompt, 0.2)
+    if res is None and status == "bad_count":
+        # 0 or >1 solutions usually means a missed or mangled constraint —
+        # one hotter re-extraction often recovers it
+        res, _ = _logic_solve_once(prompt, 0.7)
+    return res
+
+
+def _logic_solve_once(prompt: str, temp: float):
+    """One extraction + brute-force pass. Returns (Result|None, status);
+    status == 'bad_count' means the solver ran but found 0 or >1 solutions
+    (retryable extraction failure), '' means anything else."""
     try:
         raw = GENERAL.chat(
             [{"role": "system", "content": LOGIC_EXTRACT_SYS},
              {"role": "user", "content": LOGIC_FEWSHOT_U},
              {"role": "assistant", "content": LOGIC_FEWSHOT_A},
              {"role": "user", "content": prompt}],
-            max_tokens=240, temperature=0.2)
+            max_tokens=240, temperature=temp)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
         # models emit A["Sam"] != "bird" inside JSON strings — heal the quotes.
         # the value's closing quote may butt directly against the constraint
@@ -637,13 +709,13 @@ def _logic_solver(prompt: str):
         cons = [str(c) for c in spec.get("constraints", [])]
         q_attr = spec.get("question_attribute")
         if not entities or not attrs or len(entities) > 6 or len(attrs) > 6:
-            return None
+            return None, ""
         # partial-assignment puzzles name fewer people than attributes
         # ("three houses, two named residents") — pad with placeholders
         while len(entities) < len(attrs):
             entities.append(f"_unnamed{len(entities)}")
         if len(entities) != len(attrs):
-            return None
+            return None, ""
         sols = []
         for perm in itertools.permutations(attrs):
             A = dict(zip(entities, perm))
@@ -651,9 +723,9 @@ def _logic_solver(prompt: str):
                 if all(eval(c, {"__builtins__": {}}, {"A": A}) for c in cons):
                     sols.append(A)
             except Exception:  # noqa: BLE001 — malformed constraint kills solver path
-                return None
+                return None, ""
         if len(sols) != 1:
-            return None
+            return None, "bad_count"
         A = sols[0]
         named = {e: a for e, a in A.items() if not e.startswith("_unnamed")}
         reason = "; ".join(f"{e} has the {a}" for e, a in named.items())
@@ -664,7 +736,7 @@ def _logic_solver(prompt: str):
                 verb = _logic_verb(prompt)
                 return Result(f"{who} {verb} the {q_attr}. ({reason}.)", 0.92,
                               esc_suffix=" State the answer in one sentence.",
-                              esc_max_tokens=200)
+                              esc_max_tokens=200), ""
         # "which X does E have?" questions — entity named in the question
         qsents = re.findall(r"[^.?!]*\?", prompt)
         qsent = qsents[-1] if qsents else prompt
@@ -673,14 +745,14 @@ def _logic_solver(prompt: str):
         if ent_in_q:
             return Result(f"{ent_in_q} has the {A[ent_in_q]}. ({reason}.)", 0.9,
                           esc_suffix=" State the answer in one sentence.",
-                          esc_max_tokens=200)
+                          esc_max_tokens=200), ""
         assign = ", ".join(f"{e}: {a}" for e, a in named.items())
         return Result(f"The unique solution is {assign}.", 0.85,
                       esc_suffix=" State the answer in one sentence.",
-                      esc_max_tokens=200)
+                      esc_max_tokens=200), ""
     except Exception as e:  # noqa: BLE001
         log(f"logic solver path failed: {e}")
-        return None
+        return None, ""
 
 
 def _logic_verb(prompt: str) -> str:

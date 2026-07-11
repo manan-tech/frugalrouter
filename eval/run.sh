@@ -3,6 +3,7 @@
 # linux/amd64, /input + /output mounts. Times the whole run.
 #
 # Usage: eval/run.sh [tasks.json] [image] [extra docker args...]
+# Env:   CPUS — value for docker --cpus (default 2)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,7 +27,7 @@ if [[ -f .env ]]; then ENV_ARGS+=(--env-file .env); fi
 
 echo ">>> running $IMAGE on $TASKS ($(python3 -c "import json,sys;print(len(json.load(open('$WORK/input/tasks.json'))))" ) tasks)"
 START=$(date +%s)
-docker run --rm --platform linux/amd64 --cpus=2 --memory=4g \
+docker run --rm --platform linux/amd64 --cpus="${CPUS:-2}" --memory=4g \
   "${ENV_ARGS[@]}" \
   -v "$WORK/input:/input:ro" \
   -v "$PWD/output:/output" \
