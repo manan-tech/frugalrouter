@@ -116,10 +116,27 @@ def main() -> int:
                      key=lambda t: t[1])
     log("categories: " + ", ".join(f"{tid}={cat}" for tid, cat, _ in tasks_c))
 
+    local_usable = servers_ok and tps >= config.TPS_DEAD
+    if not local_usable:
+        # gate survival outranks token rank: answer everything via Fireworks
+        log(f"LOCAL PATH UNAVAILABLE (servers_ok={servers_ok}, tps={tps:.1f}) "
+            f"— emergency escalation of all tasks")
+        fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
+
     tasks_meta = []
-    if servers_ok and tps > 1.0:
+    if local_usable:
         done = 0
-        for tid, cat, prompt in tasks_c:
+        for i, (tid, cat, prompt) in enumerate(tasks_c):
+            if elapsed() > config.SOFT_NEW_WORK_S - 25:
+                log(f"soft deadline — {len(tasks_c) - done} tasks go straight "
+                    f"to escalation")
+                for tid2, cat2, prompt2 in tasks_c[i:]:
+                    tasks_meta.append((tid2, cat2, prompt2,
+                                       pipelines.Result(_FALLBACK, 0.0,
+                                                        esc_max_tokens=300)))
+                needed = fireworks.BUDGET.spent + (len(tasks_c) - done) * 260
+                fireworks.raise_budget(min(config.EMERGENCY_BUDGET_TOKENS, needed))
+                break
             mode = pick_mode(tps, len(tasks_c) - done)
             res = pipelines.run_task(cat, prompt, mode)
             RESULTS[tid] = res.answer or _FALLBACK
@@ -129,15 +146,15 @@ def main() -> int:
             done += 1
             log(f"[{done}/{len(tasks_c)}] {tid} ({cat}, {mode}) conf={res.confidence:.2f}")
     else:
-        log("LOCAL PATH UNAVAILABLE — escalating everything within budget")
         for tid, cat, prompt in tasks_c:
             tasks_meta.append((tid, cat, prompt,
-                               pipelines.Result(_FALLBACK, 0.0, esc_max_tokens=300)))
+                               pipelines.Result(_FALLBACK, 0.0,
+                                                esc_max_tokens=300)))
 
     escalate_candidates(tasks_meta)
 
     # anytime loop: spend leftover wall-clock strengthening the weakest local answers
-    if servers_ok and tps > 1.0:
+    if local_usable:
         weak = sorted((t for t in tasks_meta
                        if 0.05 < CONF.get(t[0], 0) < 0.70),
                       key=lambda t: CONF.get(t[0], 0))

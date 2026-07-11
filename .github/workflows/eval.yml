@@ -49,7 +49,7 @@ jobs:
           json.dump(slim, open(sys.argv[2], "w"), indent=1)
           EOF
           START=$(date +%s)
-          docker run --rm --cpus=2 --memory=4g \
+          docker run --rm --cpus=2 --memory=4g --memory-swap=4g \
             -e FIREWORKS_API_KEY \
             -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
             -e SOFT_NEW_WORK_S=${{ inputs.soft_s }} \

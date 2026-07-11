@@ -25,12 +25,12 @@ class LlamaServer:
         self.ctx = ctx
         self.proc = None
 
-    def start(self):
+    def start(self, ctx_override=None):
         cmd = [
             "llama-server",
             "-m", self.model_path,
             "-t", str(config.LLM_THREADS),
-            "-c", str(self.ctx),
+            "-c", str(ctx_override or self.ctx),
             "--port", str(self.port),
             "--host", "127.0.0.1",
             "--jinja",
@@ -38,9 +38,8 @@ class LlamaServer:
             "--parallel", "1",
         ]
         log(f"starting {self.name}: {' '.join(cmd)}")
-        self.proc = subprocess.Popen(
-            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        # keep stderr: if the grader kills us, the harness logs show why
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL)
 
     def wait_ready(self, timeout_s: float) -> bool:
         deadline = time.monotonic() + timeout_s
@@ -60,6 +59,8 @@ class LlamaServer:
         return False
 
     def ensure_alive(self) -> bool:
+        if getattr(self, "proxied", False):
+            return True  # routed to another live server — never respawn
         if self.proc and self.proc.poll() is None:
             return True
         log(f"{self.name} not running — restarting")
@@ -114,11 +115,30 @@ CODER = LlamaServer("coder", config.CODER_MODEL_PATH,
                     config.CODER_PORT, config.CODER_CTX)
 
 
+def _start_one(server) -> bool:
+    server.start()
+    if server.wait_ready(config.SERVER_START_TIMEOUT_S):
+        return True
+    # retry once with a smaller context (halves KV allocation)
+    log(f"{server.name} failed to start — retrying with ctx=1024")
+    server.stop()
+    time.sleep(1)
+    server.start(ctx_override=1024)
+    return server.wait_ready(config.SERVER_START_TIMEOUT_S)
+
+
 def start_all() -> bool:
-    GENERAL.start()
-    CODER.start()
-    ok_g = GENERAL.wait_ready(config.SERVER_START_TIMEOUT_S)
-    ok_c = CODER.wait_ready(config.SERVER_START_TIMEOUT_S)
+    # sequential startup halves the peak memory/CPU spike of model loading —
+    # the grading env is tighter than it looks (no swap headroom)
+    ok_g = _start_one(GENERAL)
+    ok_c = _start_one(CODER)
+    if ok_g and not ok_c:
+        log("coder dead — general will handle code categories")
+        CODER.stop()
+        CODER.proc = None
+        CODER.port = GENERAL.port  # route coder calls to the general model
+        CODER.proxied = True
+        return True
     return ok_g and ok_c
 
 

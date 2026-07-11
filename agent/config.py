@@ -16,7 +16,7 @@ CODER_PORT = 8092
 GENERAL_CTX = 2048
 CODER_CTX = 2048
 LLM_THREADS = 2
-SERVER_START_TIMEOUT_S = 90
+SERVER_START_TIMEOUT_S = 60
 
 # ---- wall clock (10-min hard limit upstream; env overrides are for the
 # local eval harness only — the grading harness never sets these) ----
@@ -28,6 +28,10 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # Total Fireworks tokens we are willing to spend (input+output, from usage).
 # 0 => pure local zero-token mode.
 ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "900"))
+# When local inference is dead or unusably slow, passing the accuracy gate
+# outranks token frugality: emergency budget covers escalating every task.
+EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "4500"))
+TPS_DEAD = 2.0   # below this, treat the local path as unusable
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 30
 ESCALATION_WORKERS = 4

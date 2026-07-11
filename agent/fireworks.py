@@ -41,6 +41,14 @@ class TokenBudget:
 BUDGET = TokenBudget(config.ESCALATION_BUDGET_TOKENS)
 
 
+def raise_budget(total: int):
+    """Emergency mode: gate survival outranks token rank."""
+    with BUDGET._lock:
+        if total > BUDGET.total:
+            BUDGET.total = total
+            log(f"escalation budget raised to {total} (emergency)")
+
+
 def _base_urls():
     base = (os.environ.get("FIREWORKS_BASE_URL")
             or "https://api.fireworks.ai/inference/v1").rstrip("/")
