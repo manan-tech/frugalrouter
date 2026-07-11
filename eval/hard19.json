@@ -1,0 +1,116 @@
+[
+ {
+  "task_id": "hf1",
+  "category": "factual",
+  "prompt": "What is the capital of Kazakhstan, and what was the city officially called between 2019 and 2022?",
+  "rubric": "Must say Astana AND that it was called Nur-Sultan during 2019-2022."
+ },
+ {
+  "task_id": "hf2",
+  "category": "factual",
+  "prompt": "Which metallic element has the highest melting point, and approximately what is that melting point in degrees Celsius?",
+  "rubric": "Must say tungsten AND approximately 3,400 C (accept 3300-3500)."
+ },
+ {
+  "task_id": "hf3",
+  "category": "factual",
+  "prompt": "Who proved the incompleteness theorems, in which year was the first one published, and what field of mathematics do they concern?",
+  "rubric": "Must say Kurt Godel, 1931, and mathematical logic (foundations of mathematics / formal systems acceptable)."
+ },
+ {
+  "task_id": "hm1",
+  "category": "math",
+  "prompt": "A laptop's price is first increased by 20%, then decreased by 25% during a sale, and finally a 10% tax is added at checkout. If the original price was $800, what is the final amount paid?",
+  "rubric": "Correct answer: $792. (800*1.2=960, *0.75=720, *1.1=792)"
+ },
+ {
+  "task_id": "hm2",
+  "category": "math",
+  "prompt": "Pipe A fills a tank in 6 hours and pipe B fills it in 4 hours. Both run together for 1 hour, then pipe A is shut off. How many more hours does pipe B need to finish filling the tank?",
+  "rubric": "Correct answer: 7/3 hours \u2248 2.33 hours (accept 7/3, 2.33, 2h20m). Together 1h fills 1/6+1/4=5/12; remaining 7/12 at B's 1/4 per hour = 7/3 hours."
+ },
+ {
+  "task_id": "hm3",
+  "category": "math",
+  "prompt": "A car travels 150 km at 50 km/h, then 90 km at 90 km/h. What is its average speed for the whole journey in km/h?",
+  "rubric": "Correct answer: 60 km/h. (Total 240 km / total 4 h)"
+ },
+ {
+  "task_id": "hs1",
+  "category": "sentiment",
+  "prompt": "Classify the sentiment of this review: Oh fantastic, another update that wiped all my settings. Exactly what I was hoping for.",
+  "rubric": "Must identify NEGATIVE sentiment (sarcasm). Labeling it positive fails; sarcastic/negative with justification passes."
+ },
+ {
+  "task_id": "hs2",
+  "category": "sentiment",
+  "prompt": "Classify the sentiment of this review: I can't say I hated it, but I wouldn't exactly recommend it to anyone either.",
+  "rubric": "Negative-leaning or lukewarm/mixed-negative with sensible justification. Pure positive fails."
+ },
+ {
+  "task_id": "hu1",
+  "category": "summary",
+  "prompt": "Summarize the following in exactly two sentences: The municipal water authority announced a phased replacement of lead service lines across the city's oldest districts, beginning next spring and continuing for six years. Funding combines a federal infrastructure grant with a modest rate increase averaging two dollars per household per month. Officials emphasized that filtered water stations will be installed in affected neighborhoods during construction, and that property owners will bear no direct replacement costs. Advocacy groups praised the plan but urged faster timelines for schools and daycare facilities, where testing last year found the highest concentrations.",
+  "rubric": "Exactly TWO sentences covering the phased lead-pipe replacement with its funding/support measures AND the advocacy push for faster school timelines. Must be exactly two sentences."
+ },
+ {
+  "task_id": "hu2",
+  "category": "summary",
+  "prompt": "Summarize the following in at most 20 words: Researchers unveiled a biodegradable battery built from cellulose and zinc that decomposes harmlessly in soil within three months. The prototype powers small sensors for agricultural monitoring, eliminating the need to retrieve devices scattered across fields after harvest seasons.",
+  "rubric": "At most 20 words; must cover biodegradable cellulose/zinc battery powering field sensors that decomposes in soil."
+ },
+ {
+  "task_id": "hn1",
+  "category": "ner",
+  "prompt": "Extract all named entities and their types from: Dr. Amara Okafor of the University of California, Berkeley presented findings at the World Economic Forum in Davos in the third week of January 2026.",
+  "rubric": "Must identify Amara Okafor (Person), University of California, Berkeley (Organization), World Economic Forum (Organization/Event), Davos (Location), January 2026 (Date; 'third week of January 2026' ideal)."
+ },
+ {
+  "task_id": "hn2",
+  "category": "ner",
+  "prompt": "Extract all named entities and their types from: The Bank of New York Mellon appointed Priya Raghavan as CFO last October, relocating her from its Singapore office to headquarters in Manhattan.",
+  "rubric": "Must identify Bank of New York Mellon (Organization, full span), Priya Raghavan (Person), last October (Date), Singapore (Location), Manhattan (Location)."
+ },
+ {
+  "task_id": "hd1",
+  "category": "code_debug",
+  "prompt": "This binary search should return the index of target in a sorted list, or -1, but has a bug: def bsearch(a, t):\n    lo, hi = 0, len(a)\n    while lo < hi:\n        mid = (lo + hi) // 2\n        if a[mid] == t: return mid\n        elif a[mid] < t: lo = mid + 1\n        else: hi = mid - 1\n    return -1. Find and fix it.",
+  "rubric": "Must identify that hi = mid - 1 is wrong for an exclusive upper bound (should be hi = mid), causing missed elements, and provide a corrected working implementation."
+ },
+ {
+  "task_id": "hd2",
+  "category": "code_debug",
+  "prompt": "This function should append an item to a per-call list but behaves strangely across calls: def add_item(item, items=[]):\n    items.append(item)\n    return items. Find and fix it.",
+  "rubric": "Must identify the mutable default argument bug (list shared across calls) and fix with items=None + items = [] if items is None else items (or equivalent)."
+ },
+ {
+  "task_id": "hl1",
+  "category": "logic",
+  "prompt": "Four colleagues \u2014 Priya, Quinn, Ravi, and Sana \u2014 each take a different drink: espresso, latte, chai, or matcha. Priya does not take espresso or latte. Quinn takes neither chai nor matcha. Ravi does not take espresso. Sana does not take chai or matcha. If Quinn takes espresso, who takes the latte?",
+  "rubric": "Correct answer: Sana. (Quinn=espresso given; Sana can't take chai/matcha so latte; Priya/Ravi take chai/matcha.)"
+ },
+ {
+  "task_id": "hl2",
+  "category": "logic",
+  "prompt": "Three boxes are labeled Apples, Oranges, and Mixed, but every label is wrong. You draw one fruit from the box labeled Mixed and it is an apple. What does each box actually contain?",
+  "rubric": "Box labeled Mixed = apples; box labeled Apples = oranges; box labeled Oranges = mixed. All three assignments must be correct."
+ },
+ {
+  "task_id": "hg1",
+  "category": "code_gen",
+  "prompt": "Write a Python function that checks whether a string of brackets containing (), [], and {} is balanced, returning True or False.",
+  "rubric": "Working stack-based (or equivalent) implementation handling all three bracket types, correct on nesting and mismatches."
+ },
+ {
+  "task_id": "hg2",
+  "category": "code_gen",
+  "prompt": "Write a Python function that performs run-length encoding of a string, e.g. 'aaabbc' becomes 'a3b2c1'.",
+  "rubric": "Working RLE producing char+count pairs for consecutive runs ('a3b2c1' style)."
+ },
+ {
+  "task_id": "hg3",
+  "category": "code_gen",
+  "prompt": "Write a Python function that returns the median of a list of numbers without using statistics or numpy, handling both odd and even lengths.",
+  "rubric": "Working implementation: sorts (or selects), returns middle element for odd length and mean of two middles for even length."
+ }
+]
