@@ -179,6 +179,8 @@ BATCH_SYS = (
 # appended to the VARIABLE user message (the cached BATCH_SYS prefix stays
 # byte-stable). Terse-style breaks judged formats for these categories:
 _CATEGORY_HINTS = {
+    "factual": ("For each: lead with the direct answer covering every part "
+                "asked; one short sentence per part; no hedging."),
     "sentiment": ("For each question: answer as '<Positive|Negative|Neutral|Mixed>"
                   " - <one short justification clause>'."),
     "summary": ("Each question states its own length/format constraint "
@@ -295,12 +297,18 @@ def batch_chat(items, category: str) -> dict:
         numbered = hint + "\n\n" + numbered
     est = est_tokens(BATCH_SYS + numbered) + max_tokens
     if not BUDGET.try_reserve(est):
-        # a batch reserves cap*n up front, which can starve even when actual
-        # spends would fit — degrade to individual calls (each reserves small,
-        # commits actuals, and stops naturally when budget truly runs out)
-        log(f"batch[{category}] cannot reserve est={est} n={len(items)} "
-            f"(spent={BUDGET.spent}/{BUDGET.total}) — degrading to individual calls")
-        return _batch_individual(items, category, per_item)
+        # reservation uses cap*n, which can starve even when actuals would
+        # fit — first shrink max_tokens to the remaining budget (commit()
+        # reconciles to actuals, so a tighter reservation can never overspend)
+        floor = est_tokens(BATCH_SYS + numbered)
+        fit = BUDGET.total - BUDGET.spent - floor
+        if fit >= len(items) * 60:  # enough for a terse answer each
+            max_tokens = min(max_tokens, fit)
+            est = floor + max_tokens
+        if not BUDGET.try_reserve(est):
+            log(f"batch[{category}] cannot reserve est={est} n={len(items)} "
+                f"(spent={BUDGET.spent}/{BUDGET.total}) — degrading to individual calls")
+            return _batch_individual(items, category, per_item)
 
     body_base = {
         "messages": [

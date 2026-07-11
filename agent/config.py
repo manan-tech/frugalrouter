@@ -45,19 +45,25 @@ ESCALATION_WORKERS = 4
 # spend tight — every category runs low reasoning; token ceilings scale with
 # how verbose a correct answer needs to be (code needs the most).
 ESC_CAPS = {
-    "factual": ("low", 300),
-    "sentiment": ("low", 200),
-    "ner": ("low", 250),
-    "summary": ("low", 500),
-    "math": ("low", 400),
-    "logic": ("low", 400),
-    "code_gen": ("low", 900),
-    "code_debug": ("low", 900),
+    "factual": ("low", 160),
+    "sentiment": ("low", 120),
+    "ner": ("low", 150),
+    "summary": ("low", 320),
+    "math": ("low", 200),
+    "logic": ("low", 220),
+    "code_gen": ("low", 500),
+    "code_debug": ("low", 500),
 }
 # Per-category escalation-confidence thresholds. Defaults to the global
 # ESCALATE_CONF_THRESHOLD for every category; calibration overwrites these
 # later. Kept in sync with ESC_CAPS keys.
-CATEGORY_THRESHOLDS = {cat: ESCALATE_CONF_THRESHOLD for cat in ESC_CAPS}
+# factual: conf is capped at 0.50 in its pipeline, so 0.55 = always escalate
+# (the only measured accuracy hole escalation actually fixes). Everything else
+# keeps only a 0.40 safety net for genuinely-broken local answers — measured
+# reliable confs (0.70-0.92) stay local at zero tokens.
+CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.40, "code_gen": 0.40,
+                       "logic": 0.40, "math": 0.40, "ner": 0.40,
+                       "sentiment": 0.40, "summary": 0.40}
 # Batch multiple escalation questions into one remote chat when possible.
 BATCH_ESCALATION = True
 # ceiling on any single batched call's max_tokens (truncation-safety)

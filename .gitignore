@@ -5,3 +5,4 @@ __pycache__/
 *.gguf
 .DS_Store
 eval/results/
+graphify-out/
