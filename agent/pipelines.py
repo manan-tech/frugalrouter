@@ -78,22 +78,35 @@ def _majority_by_similarity(outs):
 # --------------------------------------------------------------------------
 # math
 # --------------------------------------------------------------------------
-MATH_SYS = ("Convert the word problem into a short Python program. If the "
+MATH_SYS = ("Convert the word problem into a short Python program. Never write "
+            "digit separators in numbers (write 2400, not 2,400). If the "
             "problem asks for multiple values, print each one on its own line "
             "as 'label: value'. If it asks for one value, print just that "
             "number. Output only a python code block.")
-MATH_FEWSHOT_U = ("A shop has 100 apples and sells 20% of them. How many are left?")
-MATH_FEWSHOT_A = "```python\ntotal = 100\nsold = total * 20 / 100\nprint(total - sold)\n```"
+MATH_FEWSHOT_U = ("A depot starts with 1,500 boxes. It ships 24% of its stock, "
+                  "then receives 300 boxes, then ships 200 more. How many remain?")
+MATH_FEWSHOT_A = ("```python\nstock = 1500\nstock -= stock * 24 / 100\n"
+                  "stock += 300\nstock -= 200\nprint(stock)\n```")
+MATH_FEWSHOT2_U = ("A recipe uses 2/3 cup of flour for 8 buns. How much flour is "
+                   "needed for 20 buns, and what does that flour cost at $1.80 "
+                   "per cup?")
+MATH_FEWSHOT2_A = ("```python\ncups = (2 / 3) * 20 / 8\ncost = cups * 1.80\n"
+                   "print(f\"flour: {cups} cups\")\nprint(f\"cost: ${cost:.2f}\")\n```")
+
+_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}\b)")
 
 
 def _math_via_code(prompt: str, temp: float, min_p=None):
     """Returns (values_tuple, stdout) — a problem may ask for several values
     (e.g. an amount AND its cost); the judge requires all of them."""
+    clean = _THOUSANDS_RE.sub("", prompt)  # '2,400' would be a Python tuple
     out = CODER.chat(
         [{"role": "system", "content": MATH_SYS},
          {"role": "user", "content": MATH_FEWSHOT_U},
          {"role": "assistant", "content": MATH_FEWSHOT_A},
-         {"role": "user", "content": prompt}],
+         {"role": "user", "content": MATH_FEWSHOT2_U},
+         {"role": "assistant", "content": MATH_FEWSHOT2_A},
+         {"role": "user", "content": clean}],
         max_tokens=240, temperature=temp, min_p=min_p)
     code = extract_code(out)
     if not code:
