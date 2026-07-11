@@ -172,17 +172,21 @@ def encode_diagnostics(tps: float):
     if fireworks.BUDGET.spent <= 0:
         return  # proxy fully dead — no channel to write to
     bucket = 42 if tps < 4 else (292 if tps < 6 else (542 if tps < 8.5 else 792))
-    for _ in range(6):
+    overhead = 75  # measured: prompt + low-effort reasoning per filler call
+    for _ in range(8):
         if elapsed() > config.FLUSH_S - 20:
             return
-        gap = (bucket - fireworks.BUDGET.spent) % 1000
-        if gap < 90:
+        mod = fireworks.BUDGET.spent % 1000
+        if bucket <= mod < bucket + 90:
             log(f"diagnostic encoding: spent={fireworks.BUDGET.spent} "
                 f"(mod-1000 bucket {bucket}, tps={tps:.1f})")
             return
-        want = min(max(gap - 40, 16), 640)
+        # aim for mid-window so the ~±20 completion noise stays inside it
+        gap = (bucket + 40 - mod) % 1000
+        want = min(max(gap - overhead, 16), 640)
         fireworks.chat(f"Repeat the word ok {max(want // 2, 4)} times.",
                        "factual", max_tokens=want)
+    log(f"diagnostic encoding gave up: spent={fireworks.BUDGET.spent}")
 
 
 def main() -> int:
