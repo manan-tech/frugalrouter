@@ -80,10 +80,18 @@ def _id_forms(model: str):
 
 def pick_models(category: str):
     models, strict = allowed_models()
-    if category in ("factual", "sentiment", "summary", "ner"):
-        gemma = [m for m in models if config.GEMMA_HINT in m.lower()]
-        if gemma:
-            models = gemma + [m for m in models if m not in gemma]
+    if category in ("factual", "sentiment", "summary", "ner", "logic"):
+        # language work: gemma first (when allowed), then general chat models;
+        # kimi-k2p7-code is a CODE model — it emits '...' placeholders on
+        # language batches (measured) and goes last here
+        def _lang_rank(m):
+            ml = m.lower()
+            if config.GEMMA_HINT in ml:
+                return 0
+            if "code" in ml:
+                return 2
+            return 1
+        models = sorted(models, key=_lang_rank)
     out, seen = [], set()
     for m in models:
         for form in _id_forms(m):
@@ -361,6 +369,9 @@ def batch_chat(items, category: str) -> dict:
     log(f"batch escalated[{category}] n={len(items)} via "
         f"{model.rsplit('/', 1)[-1]}: {actual} tok (total {BUDGET.spent}/{BUDGET.total})")
     parsed = _parse_batch(content, len(items))
+    junk = {"...", "<answer text>", "answer text", "n/a", "na", "todo", "-"}
+    parsed = {k: v for k, v in parsed.items()
+              if v and v.strip().lower() not in junk and len(v.strip()) >= 8}
     missing = []
     for idx, (tid, prompt) in enumerate(items, 1):
         ans = parsed.get(idx)

@@ -101,9 +101,10 @@ def _math_via_code(prompt: str, temp: float, min_p=None):
     ok, stdout, _ = run_python(code)
     if not ok or not stdout.strip():
         return None
-    from .util import NUM_RE
-    nums = tuple(round(float(x), 6) for x in
-                 NUM_RE.findall(stdout.replace(",", ""))[:6])
+    from .util import extract_last_number as _last
+    nums = tuple(round(float(v), 6) for v in
+                 (_last(line) for line in stdout.strip().splitlines())
+                 if v is not None)[:6]
     if not nums:
         return None
     return nums, stdout.strip()
@@ -360,6 +361,8 @@ def ner(prompt: str, mode: str) -> Result:
     seen, lines = set(), []
     for e, t in base:
         e = _expand_span(e, prompt)
+        if not _proper_noun_like(e):
+            continue  # generic noun phrases are judge-penalized extras
         if e.lower() not in seen:
             seen.add(e.lower())
             lines.append(f"{e} | {t}")
@@ -370,15 +373,29 @@ _QUALIFIERS = r"(?:last|this|next|early|late|mid|summer|winter|spring|fall|autum
 
 
 def _expand_span(entity: str, text: str) -> str:
-    """Small models clip entity spans ('2024' for 'summer 2024'). Greedily
-    re-attach immediately-preceding qualifier words found in the source."""
+    """Small models clip entity spans ('2024' for 'summer 2024', 'March' for
+    'March 15 2023'). Re-attach preceding qualifiers and trailing day/year."""
     for _ in range(2):
         m = re.search(r"\b(" + _QUALIFIERS + r")\s+" + re.escape(entity),
                       text, re.IGNORECASE)
         if not m:
             break
         entity = text[m.start(1):m.start(1) + len(m.group(1))] + " " + entity
+    m = re.search(re.escape(entity) + r"((?:,?\s+\d{1,2})?(?:,?\s+\d{4})?)", text)
+    if m and m.group(1):
+        entity = entity + m.group(1)
     return entity
+
+
+_ALLOWED_LOWER = {"of", "the", "de", "for", "and", "&"}
+
+
+def _proper_noun_like(entity: str) -> bool:
+    """Generic noun phrases ('large language model') are judge-penalized
+    extras — require every content word capitalized or numeric."""
+    words = entity.replace(",", " ").split()
+    return all(w[0].isupper() or w[0].isdigit() or w.lower() in _ALLOWED_LOWER
+               for w in words if w)
 
 
 # --------------------------------------------------------------------------
