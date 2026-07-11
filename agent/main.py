@@ -167,6 +167,8 @@ def encode_diagnostics(tps: float):
     the only observable channel off the grading box. Buckets (mod 1000):
     042 => tps<4, 292 => 4-6, 542 => 6-8.5, 792 => >=8.5-but-emergency.
     Healthy runs never pad (rank matters there; diagnosis doesn't)."""
+    if not getattr(config, "ENCODE_TPS_TELEMETRY", False):
+        return  # measurement obtained (bucket 542) — padding is waste now
     if fireworks.BUDGET.total < config.EMERGENCY_BUDGET_TOKENS:
         return
     if fireworks.BUDGET.spent <= 0:

@@ -37,7 +37,9 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # below this, local quality/speed can't clear the gate — panic/starved-lean
 # answers score ~30-60% (grader-measured), so slow counts as dead and we
 # escalate everything (measured 95% via batches)
-TPS_DEAD = 8.5
+TPS_DEAD = 6.0  # grader measured at 6-8.5 tok/s (telemetry bucket 542):
+                # lean-local is viable there (~500-700 tok, CI-proven quality);
+                # detectors + soft-deadline escalation guard the collapse case
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
@@ -119,6 +121,9 @@ MAX_LOCAL_RETRIES = 2
 # "1" => pretend local inference is dead and take the emergency
 # escalate-everything path (CI knob: eval.yml force_emergency input).
 TEST_FORCE_EMERGENCY = os.environ.get("TEST_FORCE_EMERGENCY", "0") == "1"
+# Emergency tok/s telemetry via public token count: mission accomplished
+# (grader measured: bucket 542). Padding is pure waste now — keep off.
+ENCODE_TPS_TELEMETRY = os.environ.get("ENCODE_TPS_TELEMETRY", "0") == "1"
 # Non-empty => append one JSONL record per scored task:
 #   {"task_id", "category", "confidence", "signals"}
 # Join judge results as "judge_pass" to build the records eval/calibrate.py
