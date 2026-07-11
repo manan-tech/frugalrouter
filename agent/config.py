@@ -13,8 +13,8 @@ GENERAL_MODEL_PATH = "/models/general.gguf"   # Qwen3-1.7B Q4_K_M
 CODER_MODEL_PATH = "/models/coder.gguf"       # Qwen2.5-Coder-1.5B-Instruct Q4_K_M
 GENERAL_PORT = 8091
 CODER_PORT = 8092
-GENERAL_CTX = 2048
-CODER_CTX = 2048
+GENERAL_CTX = 1536
+CODER_CTX = 1536
 LLM_THREADS = 2
 SERVER_START_TIMEOUT_S = 60
 
@@ -31,7 +31,9 @@ ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "900")
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "4500"))
-TPS_DEAD = 2.0   # below this, treat the local path as unusable
+# below this, local quality/speed can't clear the gate — panic-grade local
+# answers score ~30%, so slow counts as dead and we escalate everything
+TPS_DEAD = 4.5
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 30
 ESCALATION_WORKERS = 4
