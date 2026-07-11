@@ -295,9 +295,12 @@ def batch_chat(items, category: str) -> dict:
         numbered = hint + "\n\n" + numbered
     est = est_tokens(BATCH_SYS + numbered) + max_tokens
     if not BUDGET.try_reserve(est):
-        log(f"batch escalation skipped (budget): est={est} n={len(items)} "
-            f"spent={BUDGET.spent}/{BUDGET.total}")
-        return results
+        # a batch reserves cap*n up front, which can starve even when actual
+        # spends would fit — degrade to individual calls (each reserves small,
+        # commits actuals, and stops naturally when budget truly runs out)
+        log(f"batch[{category}] cannot reserve est={est} n={len(items)} "
+            f"(spent={BUDGET.spent}/{BUDGET.total}) — degrading to individual calls")
+        return _batch_individual(items, category, per_item)
 
     body_base = {
         "messages": [
