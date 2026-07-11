@@ -25,9 +25,12 @@ def classify(prompt: str) -> str:
         return "code_gen"
     if re.search(r"\beach\b[^.]*\bdifferent\b|\bpuzzle\b|\briddle\b|"
                  r"\bdifferent\b[^.]*\b(position|pet|sport|color|colour|drink|"
-                 r"beverage|item|house|seat|hobby|instrument|job)s?\b", p) or (
-            re.search(r"\b(who|which)\b[^?]*\?", p) and
-            re.search(r"\b(does not|doesn't|did not|didn't|neither|isn't|not the)\b", p)):
+                 r"beverage|item|house|seat|hobby|instrument|job)s?\b|"
+                 r"\blabel(s|ed|led)?\b[^.]*\b(wrong|incorrect)|"
+                 r"\bboxes?\b[^.]*\blabel", p) or (
+            re.search(r"\b(who|which|what)\b[^?]*\?", p) and
+            re.search(r"\b(does not|doesn't|did not|didn't|neither|isn't|not the|"
+                      r"every label is wrong)\b", p)):
         return "logic"
     if _DIGITS.search(p) and re.search(
             r"how (many|much)|what is the (total|sum|result|final|value)|percent|%|"
