@@ -51,8 +51,9 @@ def judge_one(key, model, task, answer):
         "model": model,
         "messages": [{"role": "user", "content": JUDGE_PROMPT.format(
             prompt=task["prompt"], rubric=task["rubric"], answer=answer or "(empty)")}],
-        "max_tokens": 120,
+        "max_tokens": 700,
         "temperature": 0.0,
+        "reasoning_effort": "low",
     }
     req = urllib.request.Request(
         BASE, data=json.dumps(body).encode(),
@@ -60,9 +61,17 @@ def judge_one(key, model, task, answer):
                  "User-Agent": "frugalrouter-eval/1.0"})
     with urllib.request.urlopen(req, timeout=60) as r:
         resp = json.loads(r.read().decode())
-    content = resp["choices"][0]["message"]["content"]
-    m = re.search(r'\{.*\}', content, re.DOTALL)
-    d = json.loads(m.group(0)) if m else {"verdict": "FAIL", "reason": "unparseable judge output"}
+    content = resp["choices"][0]["message"].get("content") or ""
+    d = {}
+    for m in re.finditer(r'\{[^{}]*"verdict"[^{}]*\}', content, re.DOTALL):
+        try:
+            d = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            continue
+    if "verdict" not in d:
+        up = content.upper()
+        d = {"verdict": "PASS" if ("PASS" in up and "FAIL" not in up) else "FAIL",
+             "reason": "keyword-fallback: " + (content[-100:] or "empty judge output")}
     return d
 
 

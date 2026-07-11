@@ -290,6 +290,70 @@ TESTGEN_SYS = ("Write exactly 3 Python assert statements that test a function "
                "against the given specification. Cover normal and edge cases. "
                "Output only a python code block containing the asserts, "
                "no function definition.")
+INPUTGEN_SYS = ("Given a function specification and signature, write a Python "
+                "list named INPUTS of 4 argument tuples to test it with, "
+                "covering normal and edge cases, e.g. "
+                "INPUTS = [([3, 1, 2],), ([],), ([5, 5],), ([1],)]. "
+                "Only the argument values — no expected results, no function "
+                "code. Output only the INPUTS assignment.")
+
+
+def _func_name(code: str):
+    m = re.search(r"^def\s+(\w+)", code, re.MULTILINE)
+    return m.group(1) if m else None
+
+
+def _gen_inputs(spec: str, signature: str) -> str:
+    out = CODER.chat(
+        [{"role": "system", "content": INPUTGEN_SYS},
+         {"role": "user", "content":
+          f"Specification: {spec}\nFunction signature: {signature}"}],
+        max_tokens=140, temperature=0.3)
+    code = extract_code(out)
+    m = re.search(r"INPUTS\s*=\s*\[.*", code, re.DOTALL)
+    return m.group(0) if m else ""
+
+
+def _fingerprint(code: str, inputs_code: str):
+    """Run code's first function over INPUTS; return list of repr(result)."""
+    name = _func_name(code)
+    if not name or not inputs_code:
+        return None
+    prog = (
+        f"{code}\n\n{inputs_code}\n"
+        "_out = []\n"
+        "for _args in INPUTS:\n"
+        "    if not isinstance(_args, tuple):\n"
+        "        _args = (_args,)\n"
+        "    try:\n"
+        f"        _r = {name}(*_args)\n"
+        "        _out.append(repr(sorted(_r.items())) if isinstance(_r, dict) else repr(_r))\n"
+        "    except Exception as _e:\n"
+        "        _out.append('ERR:' + type(_e).__name__)\n"
+        "print('\\n'.join(_out))\n")
+    ok, stdout, _err = run_python(prog)
+    if not ok:
+        return None
+    fp = stdout.splitlines()
+    if not fp or all(x.startswith("ERR:") for x in fp):
+        return None
+    return fp
+
+
+def _behavior_verify(spec: str, impls: list, inputs_code: str):
+    """Cross-check independent implementations by observed behavior.
+    Returns (best_code, confidence) or None if machinery unavailable."""
+    fps = [(c, _fingerprint(c, inputs_code)) for c in impls if c]
+    fps = [(c, fp) for c, fp in fps if fp]
+    if len(fps) < 2:
+        return None
+    counts = Counter(tuple(fp) for _c, fp in fps)
+    top_fp, top_n = counts.most_common(1)[0]
+    if top_n >= 2:
+        best = next(c for c, fp in fps if tuple(fp) == top_fp)
+        return best, (0.9 if top_n >= 2 and len(fps) == 2 else
+                      0.9 if top_n >= 3 else 0.72)
+    return None
 
 
 def _gen_tests(spec: str, signature: str, temp: float = 0.3) -> str:
@@ -308,21 +372,39 @@ def _signature_of(code: str) -> str:
     return m.group(0) if m else "unknown"
 
 
-def code_gen(prompt: str, mode: str) -> Result:
+def _gen_impl(prompt: str, temp: float) -> str:
     out = CODER.chat(
         [{"role": "system", "content": CODEGEN_SYS},
          {"role": "user", "content": prompt}],
-        max_tokens=380, temperature=config.CODE_TEMP)
+        max_tokens=380, temperature=temp)
     code = extract_code(out)
-    if not code or "def " not in code:
-        out = CODER.chat(
-            [{"role": "system", "content": CODEGEN_SYS},
-             {"role": "user", "content": prompt + "\nOutput only the code block."}],
-            max_tokens=380, temperature=0.6)
-        code = extract_code(out)
-    if not code:
-        return Result(out.strip() or "Unable to produce code.", 0.2, esc_max_tokens=400)
-    return _verify_and_repair(prompt, code, mode, esc_max=400)
+    return code if code and "def " in code else ""
+
+
+def code_gen(prompt: str, mode: str) -> Result:
+    impl_a = _gen_impl(prompt, config.CODE_TEMP)
+    if not impl_a:
+        impl_a = _gen_impl(prompt, 0.6)
+    if not impl_a:
+        return Result("Unable to produce code.", 0.2, esc_max_tokens=400)
+    if mode == "panic":
+        return Result(_code_answer("", impl_a), 0.5, esc_max_tokens=400)
+
+    # behavioral cross-verification: two independent impls must agree on
+    # observed outputs (asserts with model-guessed expected values are the
+    # thing that fails — inputs alone are easy to generate correctly)
+    impl_b = _gen_impl(prompt, 0.75)
+    inputs_code = _gen_inputs(prompt, _signature_of(impl_a))
+    verified = _behavior_verify(prompt, [impl_a, impl_b], inputs_code)
+    if verified:
+        return Result(_code_answer("", verified[0]), verified[1], esc_max_tokens=400)
+    if impl_b and inputs_code:  # disagreement — majority vote with a third impl
+        impl_c = _gen_impl(prompt, 0.45)
+        verified = _behavior_verify(prompt, [impl_a, impl_b, impl_c], inputs_code)
+        if verified:
+            return Result(_code_answer("", verified[0]), 0.72, esc_max_tokens=400)
+    # machinery unavailable — fall back to assert-based verify/repair
+    return _verify_and_repair(prompt, impl_a, mode, esc_max=400)
 
 
 def _verify_and_repair(spec: str, code: str, mode: str, esc_max: int,
@@ -381,6 +463,7 @@ def code_debug(prompt: str, mode: str) -> Result:
     if bug_line and not bug_line.startswith("Bug:"):
         bug_line = "Bug: " + bug_line
     code = ""
+    out = ""
     for temp in (config.CODE_TEMP, 0.6):
         out = CODER.chat(
             [{"role": "system", "content": DEBUG_FIX_SYS},
@@ -392,8 +475,23 @@ def code_debug(prompt: str, mode: str) -> Result:
     if not code or "def " not in code:
         return Result((bug_line + "\n" + out).strip() or "Unable to determine.",
                       0.3, esc_max_tokens=400)
-    return _verify_and_repair(prompt, code, mode, esc_max=400,
-                              preamble=bug_line or "Bug: see corrected code below.")
+    preamble = bug_line or "Bug: see corrected code below."
+    if mode == "panic":
+        return Result(_code_answer(preamble, code), 0.5, esc_max_tokens=400)
+
+    # cross-check the fix against an independent from-scratch implementation
+    # of the described intent (same name/signature), by observed behavior
+    ref = _gen_impl(
+        f"{prompt}\n\nWrite the correct implementation from scratch. "
+        f"Keep the same function name and signature as the original.", 0.7)
+    inputs_code = _gen_inputs(prompt, _signature_of(code))
+    if ref and _func_name(ref) != _func_name(code):
+        ref = ""  # different name — behavior comparison would be meaningless
+    verified = _behavior_verify(prompt, [code, ref], inputs_code) if ref else None
+    if verified:
+        return Result(_code_answer(preamble, verified[0]), verified[1],
+                      esc_max_tokens=400)
+    return _verify_and_repair(prompt, code, mode, esc_max=400, preamble=preamble)
 
 
 # --------------------------------------------------------------------------

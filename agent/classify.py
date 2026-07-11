@@ -23,9 +23,11 @@ def classify(prompt: str) -> str:
         return "code_debug"
     if re.search(r"\b(write|implement|create|build|develop|code up)\b[^.]*\b(function|method|class|program|script|code)\b", p):
         return "code_gen"
-    if re.search(r"\beach\b[^.]*\bdifferent\b|\bpuzzle\b|\briddle\b", p) or (
-            re.search(r"\bwho (owns|has|likes|drinks|keeps|is)\b", p) and
-            re.search(r"\b(does not|doesn't|isn't|not the)\b", p)):
+    if re.search(r"\beach\b[^.]*\bdifferent\b|\bpuzzle\b|\briddle\b|"
+                 r"\bdifferent\b[^.]*\b(position|pet|sport|color|colour|drink|"
+                 r"beverage|item|house|seat|hobby|instrument|job)s?\b", p) or (
+            re.search(r"\b(who|which)\b[^?]*\?", p) and
+            re.search(r"\b(does not|doesn't|did not|didn't|neither|isn't|not the)\b", p)):
         return "logic"
     if _DIGITS.search(p) and re.search(
             r"how (many|much)|what is the (total|sum|result|final|value)|percent|%|"

@@ -1,0 +1,81 @@
+name: eval
+on:
+  workflow_dispatch:
+    inputs:
+      tasks:
+        description: "task file"
+        default: "eval/variants.json"
+      soft_s:
+        description: "SOFT_NEW_WORK_S"
+        default: "1500"
+      flush_s:
+        description: "FLUSH_S"
+        default: "1700"
+      hard_s:
+        description: "HARD_EXIT_S"
+        default: "1750"
+      budget:
+        description: "ESCALATION_BUDGET_TOKENS"
+        default: "900"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (native amd64, layer-cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          tags: frugalrouter:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run agent under grading constraints
+        env:
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+        run: |
+          mkdir -p work/input output
+          python3 - "${{ inputs.tasks }}" work/input/tasks.json <<'EOF'
+          import json, sys
+          tasks = json.load(open(sys.argv[1]))
+          slim = [{"task_id": t["task_id"], "prompt": t["prompt"]} for t in tasks]
+          json.dump(slim, open(sys.argv[2], "w"), indent=1)
+          EOF
+          START=$(date +%s)
+          docker run --rm --cpus=2 --memory=4g \
+            -e FIREWORKS_API_KEY \
+            -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
+            -e SOFT_NEW_WORK_S=${{ inputs.soft_s }} \
+            -e FLUSH_S=${{ inputs.flush_s }} \
+            -e HARD_EXIT_S=${{ inputs.hard_s }} \
+            -e ESCALATION_BUDGET_TOKENS=${{ inputs.budget }} \
+            -v "$PWD/work/input:/input:ro" \
+            -v "$PWD/output:/output" \
+            frugalrouter:ci 2>&1 | tee agent.log
+          END=$(date +%s)
+          echo "WALL_SECONDS=$((END-START))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Judge results
+        env:
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+        run: |
+          python3 eval/judge.py output/results.json "${{ inputs.tasks }}" 2>&1 | tee judge.log
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          tail -20 judge.log >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-output
+          path: |
+            output/results.json
+            agent.log
+            judge.log
