@@ -87,12 +87,14 @@ BATCH_MAX_TOKENS_CLAMP = 2200
 # problem; minimax-m3: 221; gemma variants are proxy-side only — they 404
 # on a personal key and fall through harmlessly in dev). Used when the
 # ALLOWED_MODELS env is absent; when present it takes strict precedence.
+# Gemma variants are deliberately absent: they are not serverless (teams
+# chasing the Gemma prize self-deploy them) and every call to them 404s
+# through the shared path — pure latency waste. If the harness's
+# ALLOWED_MODELS lists them anyway, they still get tried LAST via the
+# env-precedence path.
 FALLBACK_MODELS = [
     "accounts/fireworks/models/kimi-k2p7-code",
     "accounts/fireworks/models/minimax-m3",
-    "accounts/fireworks/models/gemma-4-26b-a4b-it",
-    "accounts/fireworks/models/gemma-4-31b-it",
-    "accounts/fireworks/models/gemma-4-31b-it-nvfp4",
 ]
 # Preferred for language-category escalations when present in ALLOWED_MODELS
 # (Gemma sub-prize optionality; never used unless explicitly allowed).

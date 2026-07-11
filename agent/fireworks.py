@@ -81,17 +81,9 @@ def _id_forms(model: str):
 def pick_models(category: str):
     models, strict = allowed_models()
     if category in ("factual", "sentiment", "summary", "ner", "logic"):
-        # language work: gemma first (when allowed), then general chat models;
         # kimi-k2p7-code is a CODE model — it emits '...' placeholders on
-        # language batches (measured) and goes last here
-        def _lang_rank(m):
-            ml = m.lower()
-            if config.GEMMA_HINT in ml:
-                return 0
-            if "code" in ml:
-                return 2
-            return 1
-        models = sorted(models, key=_lang_rank)
+        # language batches (measured); general chat models go first here
+        models = sorted(models, key=lambda m: 1 if "code" in m.lower() else 0)
     out, seen = [], set()
     for m in models:
         for form in _id_forms(m):
