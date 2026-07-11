@@ -78,26 +78,35 @@ def _majority_by_similarity(outs):
 # --------------------------------------------------------------------------
 # math
 # --------------------------------------------------------------------------
-MATH_SYS = ("Convert the word problem into a short Python program that prints "
-            "only the final numeric answer. Output only a python code block.")
+MATH_SYS = ("Convert the word problem into a short Python program. If the "
+            "problem asks for multiple values, print each one on its own line "
+            "as 'label: value'. If it asks for one value, print just that "
+            "number. Output only a python code block.")
 MATH_FEWSHOT_U = ("A shop has 100 apples and sells 20% of them. How many are left?")
 MATH_FEWSHOT_A = "```python\ntotal = 100\nsold = total * 20 / 100\nprint(total - sold)\n```"
 
 
 def _math_via_code(prompt: str, temp: float, min_p=None):
+    """Returns (values_tuple, stdout) — a problem may ask for several values
+    (e.g. an amount AND its cost); the judge requires all of them."""
     out = CODER.chat(
         [{"role": "system", "content": MATH_SYS},
          {"role": "user", "content": MATH_FEWSHOT_U},
          {"role": "assistant", "content": MATH_FEWSHOT_A},
          {"role": "user", "content": prompt}],
-        max_tokens=220, temperature=temp, min_p=min_p)
+        max_tokens=240, temperature=temp, min_p=min_p)
     code = extract_code(out)
     if not code:
         return None
     ok, stdout, _ = run_python(code)
-    if not ok:
+    if not ok or not stdout.strip():
         return None
-    return extract_last_number(stdout)
+    from .util import NUM_RE
+    nums = tuple(round(float(x), 6) for x in
+                 NUM_RE.findall(stdout.replace(",", ""))[:6])
+    if not nums:
+        return None
+    return nums, stdout.strip()
 
 
 _BOXED_RE = re.compile(r"\\boxed\{([^}]+)\}")
@@ -108,17 +117,17 @@ def math(prompt: str, mode: str) -> Result:
     # self-consistency sampling profile (SC_TEMP + SC_MIN_P)
     plans = ([(0.2, None), (config.SC_TEMP, config.SC_MIN_P)]
              if mode != "panic" else [(0.2, None)])
-    vals = []
+    vals = []  # list of (values_tuple, stdout)
     for t, mp in plans:
         v = _math_via_code(prompt, t, min_p=mp)
         if v is not None:
             vals.append(v)
-        if len(vals) == 2 and abs(vals[0] - vals[1]) < 1e-9:
+        if len(vals) == 2 and vals[0][0] == vals[1][0]:
             return Result(_math_answer(vals[0]), 0.92,
-                          esc_suffix=" Give only the final number.", esc_max_tokens=160)
+                          esc_suffix=_MATH_ESC, esc_max_tokens=200)
     if mode == "panic" and vals:
         return Result(_math_answer(vals[0]), 0.55,
-                      esc_suffix=" Give only the final number.", esc_max_tokens=160)
+                      esc_suffix=_MATH_ESC, esc_max_tokens=200)
     # tie-break: third code sample + a direct general-model answer
     v3 = (_math_via_code(prompt, config.SC_TEMP, min_p=config.SC_MIN_P)
           if mode != "panic" else None)
@@ -126,7 +135,7 @@ def math(prompt: str, mode: str) -> Result:
         vals.append(v3)
     direct = GENERAL.chat(
         [{"role": "system", "content":
-          "Solve step by step, then give the final number. "
+          "Solve step by step, then give the final answer(s). "
           "Put your final answer within \\boxed{}."},
          {"role": "user", "content": prompt}],
         max_tokens=560 if mode == "full" else 280, thinking=(mode == "full"))
@@ -137,26 +146,38 @@ def math(prompt: str, mode: str) -> Result:
     if dv is None:
         dv = extract_last_number(direct)
     if dv is not None:
-        vals.append(dv)
+        vals.append(((round(float(dv), 6),), fmt_number(dv)))
     if not vals:
         return Result(direct.strip() or "Unable to determine.", 0.25,
-                      esc_suffix=" Give only the final number.", esc_max_tokens=160)
-    top, cnt = Counter(vals).most_common(1)[0]
+                      esc_suffix=_MATH_ESC, esc_max_tokens=200)
+    top, cnt = Counter(v[0] for v in vals).most_common(1)[0]
+    best = next(v for v in vals if v[0] == top)
     conf = 0.8 if cnt >= 3 else (0.6 if cnt == 2 else 0.3)
-    return Result(_math_answer(top), conf,
-                  esc_suffix=" Give only the final number.", esc_max_tokens=160)
+    return Result(_math_answer(best), conf,
+                  esc_suffix=_MATH_ESC, esc_max_tokens=200)
+
+
+_MATH_ESC = (" Give the final answer(s) with brief working; if multiple values "
+             "are asked for, state each one clearly.")
 
 
 def _math_answer(v) -> str:
-    return f"The answer is {fmt_number(v)}."
+    values, stdout = v
+    if len(values) == 1:
+        return f"The answer is {fmt_number(values[0])}."
+    # multi-value problems: the program's labeled output IS the answer
+    return stdout
 
 
 # --------------------------------------------------------------------------
 # sentiment
 # --------------------------------------------------------------------------
 SENTIMENT_SYS = ("Classify the sentiment of the given text as Positive, Negative, "
-                 "Neutral, or Mixed, and briefly justify.")
-SENTIMENT_GRAMMAR = r'''root ::= label " - " [^\n]{12,150}
+                 "Neutral, or Mixed, then give a one-sentence reason. If the text "
+                 "contains BOTH good and bad aspects, never label it Negative — "
+                 "use Mixed (or Positive if the outcome is good) and the reason "
+                 "must explicitly mention both the negative and positive aspects.")
+SENTIMENT_GRAMMAR = r'''root ::= label " - " [^\n]{12,220}
 label ::= "Positive" | "Negative" | "Neutral" | "Mixed"'''
 _LABEL_RE = re.compile(r"^(Positive|Negative|Neutral|Mixed)\b", re.IGNORECASE)
 
@@ -194,11 +215,24 @@ def sentiment(prompt: str, mode: str) -> Result:
 # summary
 # --------------------------------------------------------------------------
 SUMMARY_SYS = ("Summarize the given passage. Obey the stated length/format "
-               "constraint exactly. Output only the summary, nothing else.")
+               "constraint exactly. If bullet points are requested, output "
+               "each as a line starting with '- ' and nothing else. "
+               "Output only the summary, nothing else.")
+
+
+_WORDNUM = {"one": 1, "a single": 1, "two": 2, "three": 3, "four": 4, "five": 5}
 
 
 def _summary_constraint(prompt: str):
     p = prompt.lower()
+    # bullet formats: "exactly three bullet points, each no longer than 15 words"
+    m = re.search(r"(?:exactly |in )?(one|two|three|four|five|\d+) bullet"
+                  r"(?: point)?s?", p)
+    if m:
+        n = _WORDNUM.get(m.group(1)) or int(m.group(1))
+        mw = re.search(r"each (?:no longer than|no more than|under|at most|"
+                       r"with(?:in)? (?:a maximum of )?)\s*(\d+) words", p)
+        return ("bullets", (n, int(mw.group(1)) if mw else None))
     m = re.search(r"exactly (one|two|three|four|five|\d+) sentences?", p)
     if m:
         w = m.group(1)
@@ -236,7 +270,14 @@ def summary(prompt: str, mode: str) -> Result:
               f"constraint exactly. Output only the corrected summary."}],
             max_tokens=220, temperature=0.4)
     # programmatic last resort
-    if kind == "sentences_exact" and n:
+    if kind == "bullets":
+        want, word_cap = n
+        lines = _bullet_lines(out) or split_sentences(out)
+        lines = (lines + [""] * want)[:want]
+        cap = word_cap or 15
+        out = "\n".join("- " + " ".join(ln.split()[:cap]).rstrip(".,;")
+                         for ln in lines if ln)
+    elif kind == "sentences_exact" and n:
         sents = split_sentences(out)
         out = " ".join(sents[:n]) if len(sents) >= n else out
     elif kind == "words_max" and n:
@@ -244,9 +285,25 @@ def summary(prompt: str, mode: str) -> Result:
     return Result(out.strip(), 0.55, esc_max_tokens=220)
 
 
+def _bullet_lines(out: str):
+    return [ln.strip().lstrip("-*•").strip() for ln in out.splitlines()
+            if ln.strip().lstrip("-*•").strip()]
+
+
 def _summary_ok(out: str, kind, n):
     if not out.strip():
         return False, "empty"
+    if kind == "bullets":
+        want, word_cap = n
+        lines = _bullet_lines(out)
+        if len(lines) != want:
+            return False, f"has {len(lines)} bullet points, needs exactly {want}"
+        if word_cap:
+            for ln in lines:
+                if len(ln.split()) > word_cap:
+                    return False, (f"a bullet has {len(ln.split())} words, "
+                                   f"max {word_cap} per bullet")
+        return True, ""
     if not re.search(r'[.!?]["\')\]]*\s*$', out.strip()):
         return False, "it is cut off mid-sentence"
     if kind == "sentences_exact":
@@ -262,8 +319,8 @@ def _summary_ok(out: str, kind, n):
 # NER
 # --------------------------------------------------------------------------
 NER_SYS = ('Extract all named entities from the given text. Output one entity '
-           'per line, formatted exactly as "Entity | Type". Allowed types: '
-           'Person, Organization, Location, Date, Event, Product. '
+           'per line, formatted exactly as "Entity | TYPE". Allowed types: '
+           'PERSON, ORGANIZATION, LOCATION, DATE, EVENT, PRODUCT. '
            'If there are none, output exactly: None')
 _NER_LINE = re.compile(r"^(.{1,60}?)\s*\|\s*(Person|Organization|Location|Date|Event|Product)\s*$",
                        re.IGNORECASE | re.MULTILINE)
@@ -279,7 +336,7 @@ def ner(prompt: str, mode: str) -> Result:
             max_tokens=110,
             temperature=0.15 if i == 0 else config.SC_TEMP,
             min_p=None if i == 0 else config.SC_MIN_P)
-        pairs = [(m.group(1).strip(), m.group(2).title())
+        pairs = [(m.group(1).strip(), m.group(2).upper())
                  for m in _NER_LINE.finditer(o)]
         parsed.append(pairs)
     if not any(parsed):
