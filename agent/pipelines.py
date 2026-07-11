@@ -819,6 +819,68 @@ def _logic_verb(prompt: str) -> str:
     return m.group(1) if m else "has"
 
 
+# cues that a task carries explicit format/structure requirements our
+# specialized parsers may not recognize (the hidden set can invent new ones)
+_CONSTRAINT_CUES = re.compile(
+    r"exactly|at most|no more than|fewer than|no longer than|bullet|numbered|"
+    r"\bjson\b|\btable\b|uppercase|lowercase|one paragraph|single word|"
+    r"comma[- ]separated|\bin \d+ words\b|maximum of|begin with|end with|"
+    r"format(?:ted)? as", re.IGNORECASE)
+# formats our sentiment/NER templates would actively violate if requested
+_FORMAT_OVERRIDE_CUES = re.compile(
+    r"\bjson\b|\btable\b|comma[- ]separated|single word|numbered list|"
+    r"uppercase|lowercase", re.IGNORECASE)
+
+COMPLIANCE_SYS = ("You check format compliance only — not factual accuracy. "
+                  "Reply exactly 'PASS' if the answer satisfies every explicit "
+                  "format, length, and structural requirement stated in the "
+                  "task, else 'FAIL: <the requirement violated>'.")
+
+
+def _compliance_check(prompt: str, answer: str):
+    """Zero-token generic verifier for requirement shapes we don't parse."""
+    verdict = GENERAL.chat(
+        [{"role": "system", "content": COMPLIANCE_SYS},
+         {"role": "user", "content": f"Task:\n{prompt}\n\nAnswer:\n{answer}"}],
+        max_tokens=48, temperature=0.1)
+    v = verdict.strip()
+    return v.upper().startswith("PASS"), v
+
+
+def _enforce_generic_format(category: str, prompt: str, res: Result) -> Result:
+    """When a task states requirements our parsers didn't handle, verify
+    compliance with the local model; one guided retry, then escalate-worthy."""
+    if category not in ("summary", "ner", "sentiment", "factual"):
+        return res
+    if not _CONSTRAINT_CUES.search(prompt):
+        return res
+    if category == "summary" and _summary_constraint(prompt)[0] is not None:
+        return res  # the specialized parser already enforced this shape
+    if category in ("ner", "sentiment") and not _FORMAT_OVERRIDE_CUES.search(prompt):
+        return res  # our pinned template is compatible with the request
+    try:
+        ok, verdict = _compliance_check(prompt, res.answer)
+        if ok:
+            return res
+        log(f"generic-format check failed ({category}): {verdict[:80]}")
+        redo = GENERAL.chat(
+            [{"role": "system", "content":
+              "Answer the task, following its stated format requirements "
+              "EXACTLY. Output only the answer."},
+             {"role": "user", "content":
+              f"{prompt}\n\n(Your previous answer violated: {verdict[:120]})"}],
+            max_tokens=max(res.esc_max_tokens, 220), temperature=0.4)
+        if redo.strip():
+            ok2, _v2 = _compliance_check(prompt, redo)
+            conf = res.confidence if ok2 else min(res.confidence, 0.45)
+            return Result(redo.strip(), conf, res.esc_suffix, res.esc_max_tokens)
+        return Result(res.answer, min(res.confidence, 0.45),
+                      res.esc_suffix, res.esc_max_tokens)
+    except Exception as e:  # noqa: BLE001
+        log(f"generic-format check error: {e}")
+        return res
+
+
 HANDLERS = {
     "factual": factual,
     "math": math,
@@ -834,7 +896,10 @@ HANDLERS = {
 def run_task(category: str, prompt: str, mode: str) -> Result:
     handler = HANDLERS.get(category, factual)
     try:
-        return handler(prompt, mode)
+        res = handler(prompt, mode)
+        if mode != "panic":
+            res = _enforce_generic_format(category, prompt, res)
+        return res
     except Exception as e:  # noqa: BLE001 — a task must never take down the run
         log(f"pipeline[{category}] crashed: {e}; falling back to direct answer")
         try:
