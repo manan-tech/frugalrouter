@@ -1,0 +1,7 @@
+.env
+models/
+output/
+__pycache__/
+*.gguf
+.DS_Store
+eval/results/
