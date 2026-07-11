@@ -24,6 +24,7 @@ _GEN_LOCK = threading.Lock()  # one local generation at a time, ever
 # harness never sets it, so production requests stay byte-identical.
 CAPTURE_SIGNALS = False
 LAST_SIGNALS = {}  # signals from the most recent local completion (mutated in place)
+LAST_TIMINGS = {}  # llama-server's own timings from the most recent completion
 
 # Number of top-logprob alternatives requested per position; also the fixed k
 # used by _extract_signals' self_certainty ("relative to uniform over top-k").
@@ -113,7 +114,7 @@ class LlamaServer:
             # buffer; q8_0 KV halves cache memory (needs flash attention).
             "--cache-ram", "0",
             "-b", "512",
-            "-ub", "128",
+            "-ub", "256",  # 128 halves prompt-processing speed; 256 still caps the spike
             "-fa", "on",
             "-ctk", "q8_0",
             "-ctv", "q8_0",
@@ -200,6 +201,10 @@ class LlamaServer:
                 choice = resp["choices"][0]
                 msg = choice["message"]
                 content = strip_think(msg.get("content") or "")
+                t = resp.get("timings") or {}
+                if t:
+                    LAST_TIMINGS.clear()
+                    LAST_TIMINGS.update(t)
                 if return_signals or CAPTURE_SIGNALS:
                     signals = _extract_signals(choice)
                     LAST_SIGNALS.clear()
@@ -270,6 +275,9 @@ def probe_tps() -> float:
              {"role": "user", "content": _WARMUP_FILLER}],
             max_tokens=64, temperature=0.0, timeout_s=120)
         dt = time.monotonic() - t0
+        # snapshot the GENERAL call's server-side timings before the coder
+        # call overwrites LAST_TIMINGS
+        gen_timings = dict(LAST_TIMINGS)
         CODER.chat(
             [{"role": "user", "content":
               "Write a python function that adds two numbers. Code only."}],
@@ -280,8 +288,12 @@ def probe_tps() -> float:
     if not (GENERAL.proc and GENERAL.proc.poll() is None):
         log("general server died during warmup")
         return 0.0
-    # decode-rate estimate from the general call (prompt+gen mixed; the
-    # governor thresholds were calibrated against this same measurement)
-    tps = 64.0 / max(dt - 3.0, 0.5)  # rough pp deduction; conservative
-    log(f"warmup workout OK: ~{tps:.1f} tok/s (both servers alive)")
+    # exact decode rate from llama-server's own timings; the crude wall-clock
+    # formula misjudged healthy runners as dead (pp time dominated dt)
+    tps = float(gen_timings.get("predicted_per_second") or 0.0)
+    pp = float(gen_timings.get("prompt_per_second") or 0.0)
+    if tps <= 0.0:  # timings missing — conservative wall-clock fallback
+        tps = 64.0 / max(dt, 0.5)
+    log(f"warmup workout OK: decode ~{tps:.1f} tok/s, prompt ~{pp:.0f} tok/s "
+        f"(both servers alive)")
     return tps
