@@ -3,7 +3,6 @@
 Contract: read /input/tasks.json -> write /output/results.json, exit 0.
 Never crash, never time out, never leave invalid JSON."""
 
-import concurrent.futures
 import json
 import os
 import signal
@@ -64,28 +63,28 @@ def pick_mode(tps: float, tasks_left: int) -> str:
     return order[i]
 
 
-def escalate_candidates(tasks_meta):
+def escalate_candidates(tasks_meta, threshold=None):
+    threshold = threshold if threshold is not None else config.ESCALATE_CONF_THRESHOLD
     cands = [(tid, cat, prompt, res) for tid, cat, prompt, res in tasks_meta
-             if CONF.get(tid, 0) < config.ESCALATE_CONF_THRESHOLD]
+             if CONF.get(tid, 0) < threshold]
     if not cands or config.ESCALATION_BUDGET_TOKENS <= 0:
         if cands:
             log(f"{len(cands)} weak tasks but escalation budget is 0 — staying local")
         return
-    cands.sort(key=lambda c: CONF.get(c[0], 0))
-    log(f"escalating {len(cands)} weakest tasks (budget {fireworks.BUDGET.total})")
-
-    def _one(c):
-        tid, cat, prompt, res = c
-        ans, spent = fireworks.chat(prompt + res.esc_suffix, cat,
-                                    max_tokens=res.esc_max_tokens)
-        return tid, ans
-
-    with concurrent.futures.ThreadPoolExecutor(config.ESCALATION_WORKERS) as ex:
-        for tid, ans in ex.map(_one, cands):
-            if ans and ans.strip():
-                RESULTS[tid] = ans.strip()
-                CONF[tid] = 0.88
-                flush()
+    # cheapest-estimated-first, sequentially: actual spend (not max_tokens
+    # reservations) gates later calls, maximizing tasks fixed per budget
+    cands.sort(key=lambda c: fireworks.est_tokens(c[2]) + c[3].esc_max_tokens)
+    log(f"escalating {len(cands)} weak tasks, cheapest first "
+        f"(budget {fireworks.BUDGET.spent}/{fireworks.BUDGET.total})")
+    for tid, cat, prompt, res in cands:
+        if elapsed() > config.FLUSH_S - 15:
+            break
+        ans, _spent = fireworks.chat(prompt + res.esc_suffix, cat,
+                                     max_tokens=res.esc_max_tokens)
+        if ans and ans.strip():
+            RESULTS[tid] = ans.strip()
+            CONF[tid] = 0.88
+            flush()
 
 
 def main() -> int:
@@ -148,13 +147,21 @@ def main() -> int:
             log(f"anytime: re-running {tid} ({cat})")
             try:
                 res2 = pipelines.run_task(cat, prompt, "full")
-                if res2.confidence > CONF.get(tid, 0) and res2.answer.strip():
+                conf2 = res2.confidence
+                if cat == "factual":
+                    # agreement can't verify facts — never let a factual
+                    # answer look solid enough to dodge the second escalation
+                    conf2 = min(conf2, 0.75)
+                if conf2 > CONF.get(tid, 0) and res2.answer.strip():
                     RESULTS[tid] = res2.answer
-                    CONF[tid] = res2.confidence
+                    CONF[tid] = conf2
                     flush()
-                    log(f"anytime: improved {tid} to conf={res2.confidence:.2f}")
+                    log(f"anytime: improved {tid} to conf={conf2:.2f}")
             except Exception as e:  # noqa: BLE001
                 log(f"anytime error on {tid}: {e}")
+
+    # second escalation pass: leftover budget goes to anything still shaky
+    escalate_candidates(tasks_meta, threshold=0.60)
 
     flush()
     try:

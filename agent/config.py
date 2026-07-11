@@ -18,15 +18,16 @@ CODER_CTX = 2048
 LLM_THREADS = 2
 SERVER_START_TIMEOUT_S = 90
 
-# ---- wall clock (10-min hard limit upstream) ----
-SOFT_NEW_WORK_S = 445    # no new improvement work after this
-FLUSH_S = 505            # watchdog forces a results flush
-HARD_EXIT_S = 535        # watchdog force-exits process (exit 0)
+# ---- wall clock (10-min hard limit upstream; env overrides are for the
+# local eval harness only — the grading harness never sets these) ----
+SOFT_NEW_WORK_S = int(os.environ.get("SOFT_NEW_WORK_S", "445"))
+FLUSH_S = int(os.environ.get("FLUSH_S", "505"))
+HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 
 # ---- escalation ----
 # Total Fireworks tokens we are willing to spend (input+output, from usage).
 # 0 => pure local zero-token mode.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "500"))
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "900"))
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 30
 ESCALATION_WORKERS = 4

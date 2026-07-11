@@ -195,7 +195,7 @@ def summary(prompt: str, mode: str) -> Result:
     out = GENERAL.chat(
         [{"role": "system", "content": SUMMARY_SYS},
          {"role": "user", "content": prompt}],
-        max_tokens=140, temperature=0.5)
+        max_tokens=220, temperature=0.5)
     for attempt in range(config.MAX_LOCAL_RETRIES):
         ok, detail = _summary_ok(out, kind, n)
         if ok:
@@ -207,9 +207,9 @@ def summary(prompt: str, mode: str) -> Result:
              {"role": "assistant", "content": out},
              {"role": "user", "content":
               f"Your summary violates the constraint ({detail}). "
-              f"Rewrite it so it satisfies the constraint exactly. "
-              f"Output only the corrected summary."}],
-            max_tokens=140, temperature=0.4)
+              f"Rewrite it — shorter and complete — so it satisfies the "
+              f"constraint exactly. Output only the corrected summary."}],
+            max_tokens=220, temperature=0.4)
     # programmatic last resort
     if kind == "sentences_exact" and n:
         sents = split_sentences(out)
@@ -222,6 +222,8 @@ def summary(prompt: str, mode: str) -> Result:
 def _summary_ok(out: str, kind, n):
     if not out.strip():
         return False, "empty"
+    if not re.search(r'[.!?]["\')\]]*\s*$', out.strip()):
+        return False, "it is cut off mid-sentence"
     if kind == "sentences_exact":
         k = len(split_sentences(out))
         return k == n, f"has {k} sentences, needs exactly {n}"
@@ -362,26 +364,36 @@ def _code_answer(preamble: str, code: str) -> str:
 # --------------------------------------------------------------------------
 # code debugging
 # --------------------------------------------------------------------------
-DEBUG_SYS = ("You are given code with a bug and its intended behavior. First "
-             "state the bug in one short sentence starting with 'Bug:'. Then "
-             "output the corrected complete code in a python code block.")
+DEBUG_BUG_SYS = ("State in ONE short sentence what the bug is. Start your "
+                 "answer with 'Bug:'. Do not write any code.")
+DEBUG_FIX_SYS = ("You are given code with a bug and its intended behavior. "
+                 "Output only the corrected complete code in a python code "
+                 "block. No explanations.")
 
 
 def code_debug(prompt: str, mode: str) -> Result:
-    out = CODER.chat(
-        [{"role": "system", "content": DEBUG_SYS},
+    # small models are unreliable at "sentence then code" combos — split calls
+    bug = CODER.chat(
+        [{"role": "system", "content": DEBUG_BUG_SYS},
          {"role": "user", "content": prompt}],
-        max_tokens=380, temperature=config.CODE_TEMP)
-    code = extract_code(out)
-    bug_line = ""
-    m = re.search(r"^Bug:.*$", out, re.MULTILINE)
-    if m:
-        bug_line = m.group(0).strip()
+        max_tokens=60, temperature=0.2)
+    bug_line = bug.strip().splitlines()[0] if bug.strip() else ""
+    if bug_line and not bug_line.startswith("Bug:"):
+        bug_line = "Bug: " + bug_line
+    code = ""
+    for temp in (config.CODE_TEMP, 0.6):
+        out = CODER.chat(
+            [{"role": "system", "content": DEBUG_FIX_SYS},
+             {"role": "user", "content": prompt}],
+            max_tokens=340, temperature=temp)
+        code = extract_code(out)
+        if code and "def " in code:
+            break
     if not code or "def " not in code:
-        return Result(out.strip() or "Unable to determine.", 0.3, esc_max_tokens=400)
-    res = _verify_and_repair(prompt, code, mode, esc_max=400,
-                             preamble=bug_line or "Bug: see corrected code below.")
-    return res
+        return Result((bug_line + "\n" + out).strip() or "Unable to determine.",
+                      0.3, esc_max_tokens=400)
+    return _verify_and_repair(prompt, code, mode, esc_max=400,
+                              preamble=bug_line or "Bug: see corrected code below.")
 
 
 # --------------------------------------------------------------------------
@@ -390,9 +402,14 @@ def code_debug(prompt: str, mode: str) -> Result:
 LOGIC_EXTRACT_SYS = (
     "Convert the puzzle into JSON with keys: entities (list of names), "
     "attributes (list of things assigned to entities), constraints (list of "
-    "Python boolean expressions over dict A mapping entity to attribute, e.g. "
-    "\"A['Sam'] != 'bird'\"), question_attribute (the attribute the question "
-    "asks about, or null). Output only the JSON.")
+    "Python boolean expressions over dict A mapping entity to attribute), "
+    "question_attribute (the attribute the question asks about, or null). "
+    "Output only the JSON.")
+LOGIC_FEWSHOT_U = ("Two kids, Ann and Max, each like a different fruit: apple "
+                   "or pear. Ann does not like the pear. Who likes the pear?")
+LOGIC_FEWSHOT_A = ('{"entities": ["Ann", "Max"], "attributes": ["apple", "pear"], '
+                   '"constraints": ["A[\'Ann\'] != \'pear\'"], '
+                   '"question_attribute": "pear"}')
 LOGIC_DIRECT_SYS = ("Solve the puzzle. State the answer in one short sentence, "
                     "then give one brief supporting reason.")
 
@@ -420,6 +437,8 @@ def _logic_solver(prompt: str):
     try:
         raw = GENERAL.chat(
             [{"role": "system", "content": LOGIC_EXTRACT_SYS},
+             {"role": "user", "content": LOGIC_FEWSHOT_U},
+             {"role": "assistant", "content": LOGIC_FEWSHOT_A},
              {"role": "user", "content": prompt}],
             max_tokens=240, temperature=0.2)
         raw = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
