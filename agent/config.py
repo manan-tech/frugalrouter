@@ -80,17 +80,17 @@ BATCH_ESCALATION = True
 # ceiling on any single batched call's max_tokens (truncation-safety)
 BATCH_MAX_TOKENS_CLAMP = 2200
 
-# Strong serverless models, ranked by measured total-token frugality on a
-# representative escalation (verified live 2026-07-11: gpt-oss-120b w/
-# reasoning_effort=low → 137 tok; glm-5p2 → 165; kimi-k2p6 → 180;
-# deepseek-v4-pro → 189; glm-5p1 → 237). Used when ALLOWED_MODELS env is
-# absent/empty; otherwise strictly intersected with it.
+# THE OFFICIAL TRACK-1 ALLOWED LIST (organizer announcement), frugality-
+# ordered from live measurement (kimi-k2p7-code: 116 tok for a full word
+# problem; minimax-m3: 221; gemma variants are proxy-side only — they 404
+# on a personal key and fall through harmlessly in dev). Used when the
+# ALLOWED_MODELS env is absent; when present it takes strict precedence.
 FALLBACK_MODELS = [
-    "accounts/fireworks/models/gpt-oss-120b",
-    "accounts/fireworks/models/glm-5p2",
-    "accounts/fireworks/models/kimi-k2p6",
-    "accounts/fireworks/models/deepseek-v4-pro",
-    "accounts/fireworks/models/glm-5p1",
+    "accounts/fireworks/models/kimi-k2p7-code",
+    "accounts/fireworks/models/minimax-m3",
+    "accounts/fireworks/models/gemma-4-26b-a4b-it",
+    "accounts/fireworks/models/gemma-4-31b-it",
+    "accounts/fireworks/models/gemma-4-31b-it-nvfp4",
 ]
 # Preferred for language-category escalations when present in ALLOWED_MODELS
 # (Gemma sub-prize optionality; never used unless explicitly allowed).

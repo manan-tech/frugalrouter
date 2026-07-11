@@ -70,13 +70,27 @@ def allowed_models():
     return list(config.FALLBACK_MODELS), False
 
 
+def _id_forms(model: str):
+    """A model id may arrive bare ('minimax-m3') or fully-qualified — the
+    proxy's expectation is unknown, so try both forms."""
+    if "/" in model:
+        return [model, model.rsplit("/", 1)[-1]]
+    return [model, f"accounts/fireworks/models/{model}"]
+
+
 def pick_models(category: str):
     models, strict = allowed_models()
-    if strict and category in ("factual", "sentiment", "summary", "ner"):
+    if category in ("factual", "sentiment", "summary", "ner"):
         gemma = [m for m in models if config.GEMMA_HINT in m.lower()]
         if gemma:
-            return gemma + [m for m in models if m not in gemma]
-    return models
+            models = gemma + [m for m in models if m not in gemma]
+    out, seen = [], set()
+    for m in models:
+        for form in _id_forms(m):
+            if form not in seen:
+                seen.add(form)
+                out.append(form)
+    return out
 
 
 def est_tokens(text: str) -> int:
@@ -119,10 +133,15 @@ def _request(body_base: dict, category: str, est: int):
                     body = e.read().decode(errors="replace")[:300]
                 except Exception:  # noqa: BLE001
                     body = "<unreadable>"
-                if e.code == 404:
-                    continue  # wrong path or unknown model — next url, then next model
-                if e.code in (401, 403):
-                    log(f"escalation auth failure ({e.code}): {body}")
+                if e.code in (403, 404):
+                    # 404 = unknown model/path; 403 = model forbidden by the
+                    # proxy's allow-list. Both are PER-MODEL verdicts — try
+                    # the next url, then the next model. (v8 fatally treated
+                    # 403 as account-wide auth failure and aborted everything.)
+                    log(f"escalation {e.code} on {model.rsplit('/', 1)[-1]}: {body[:120]}")
+                    continue
+                if e.code == 401:
+                    log(f"escalation auth failure (401): {body}")
                     BUDGET.refund(est)
                     return None, 0, None
                 log(f"escalation http {e.code} on {model.rsplit('/', 1)[-1]}: {body}")
