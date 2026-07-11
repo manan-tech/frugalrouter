@@ -176,6 +176,22 @@ BATCH_SYS = (
 )
 
 
+# appended to the VARIABLE user message (the cached BATCH_SYS prefix stays
+# byte-stable). Terse-style breaks judged formats for these categories:
+_CATEGORY_HINTS = {
+    "sentiment": ("For each question: answer as '<Positive|Negative|Neutral|Mixed>"
+                  " - <one short justification clause>'."),
+    "summary": ("Each question states its own length/format constraint "
+                "(e.g. exactly N sentences, max N words) — obey it EXACTLY; "
+                "these answers are exempt from terseness."),
+    "code_gen": ("Each answer must contain the complete working code inside "
+                 "the answer string (escape newlines as \\n in JSON)."),
+    "code_debug": ("Each answer must state the bug in one sentence, then give "
+                   "the complete corrected code (escape newlines as \\n)."),
+    "logic": "For each: state who/what the answer is in one sentence, then one brief reason.",
+}
+
+
 def _esc_cap(category: str):
     """(reasoning_effort, max_tokens_per_item) for a category, baked default."""
     caps = getattr(config, "ESC_CAPS", {}) or {}
@@ -271,8 +287,12 @@ def batch_chat(items, category: str) -> dict:
         return results
 
     reasoning, per_item = _esc_cap(category)
-    max_tokens = per_item * len(items)  # scales with batch size
+    max_tokens = min(per_item * len(items),
+                     getattr(config, "BATCH_MAX_TOKENS_CLAMP", 2200))
     numbered = "\n".join(f"{i}. {p}" for i, (_tid, p) in enumerate(items, 1))
+    hint = _CATEGORY_HINTS.get(category)
+    if hint:
+        numbered = hint + "\n\n" + numbered
     est = est_tokens(BATCH_SYS + numbered) + max_tokens
     if not BUDGET.try_reserve(est):
         log(f"batch escalation skipped (budget): est={est} n={len(items)} "

@@ -33,7 +33,7 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "1300"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
-EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "4500"))
+EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
 # below this, local quality/speed can't clear the gate — panic-grade local
 # answers score ~30%, so slow counts as dead and we escalate everything
 TPS_DEAD = 4.5
@@ -60,6 +60,8 @@ ESC_CAPS = {
 CATEGORY_THRESHOLDS = {cat: ESCALATE_CONF_THRESHOLD for cat in ESC_CAPS}
 # Batch multiple escalation questions into one remote chat when possible.
 BATCH_ESCALATION = True
+# ceiling on any single batched call's max_tokens (truncation-safety)
+BATCH_MAX_TOKENS_CLAMP = 2200
 
 # Strong serverless models, ranked by measured total-token frugality on a
 # representative escalation (verified live 2026-07-11: gpt-oss-120b w/

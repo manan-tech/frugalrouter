@@ -239,6 +239,18 @@ def main() -> int:
     # second escalation pass: leftover budget goes to anything still shaky
     escalate_candidates(tasks_meta, threshold=0.60)
 
+    # last-ditch sweep: nothing may ship as fallback text while budget remains
+    for tid, cat, prompt, res in tasks_meta:
+        if CONF.get(tid, 0) >= 0.1 or elapsed() > config.FLUSH_S - 12:
+            continue
+        _r, per_item = fireworks._esc_cap(cat)
+        ans, _sp = fireworks.chat(prompt + res.esc_suffix, cat, max_tokens=per_item)
+        if ans and ans.strip():
+            RESULTS[tid] = ans.strip()
+            CONF[tid] = 0.85
+            flush()
+            log(f"last-ditch escalation rescued {tid}")
+
     flush()
     try:
         llm.stop_all()
