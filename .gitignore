@@ -6,3 +6,9 @@ __pycache__/
 .DS_Store
 eval/results/
 graphify-out/
+
+# strategy docs — unignore and commit AFTER the competition closes
+FINDINGS.md
+EDITS.md
+FAILURES.md
+FUTURE.md
