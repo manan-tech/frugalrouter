@@ -126,49 +126,62 @@ def _math_via_code(prompt: str, temp: float, min_p=None):
 _BOXED_RE = re.compile(r"\\boxed\{([^}]+)\}")
 
 
-def math(prompt: str, mode: str) -> Result:
-    # first/primary sample stays cold; extra diverse samples use the
-    # self-consistency sampling profile (SC_TEMP + SC_MIN_P)
-    plans = ([(0.2, None), (config.SC_TEMP, config.SC_MIN_P)]
-             if mode != "panic" else [(0.2, None)])
-    vals = []  # list of (values_tuple, stdout)
-    for t, mp in plans:
-        v = _math_via_code(prompt, t, min_p=mp)
-        if v is not None:
-            vals.append(v)
-        if len(vals) == 2 and vals[0][0] == vals[1][0]:
-            return Result(_math_answer(vals[0]), 0.92,
-                          esc_suffix=_MATH_ESC, esc_max_tokens=200)
-    if mode == "panic" and vals:
-        return Result(_math_answer(vals[0]), 0.55,
-                      esc_suffix=_MATH_ESC, esc_max_tokens=200)
-    # tie-break: third code sample + a direct general-model answer
-    v3 = (_math_via_code(prompt, config.SC_TEMP, min_p=config.SC_MIN_P)
-          if mode != "panic" else None)
-    if v3 is not None:
-        vals.append(v3)
+_MULTI_ASK_RE = re.compile(r"\?.*\?|,\s*(?:and\s+)?(?:what|how much|how many)\b",
+                           re.IGNORECASE | re.DOTALL)
+
+
+def _math_direct_value(prompt: str, mode: str):
+    """Independent answer from the OTHER model — heterogeneous check."""
     direct = GENERAL.chat(
         [{"role": "system", "content":
           "Solve step by step, then give the final answer(s). "
           "Put your final answer within \\boxed{}."},
          {"role": "user", "content": prompt}],
         max_tokens=560 if mode == "full" else 280, thinking=(mode == "full"))
-    dv = None
     boxed = _BOXED_RE.search(direct)
-    if boxed:
-        dv = extract_last_number(boxed.group(1))
+    dv = extract_last_number(boxed.group(1)) if boxed else None
     if dv is None:
         dv = extract_last_number(direct)
-    if dv is not None:
-        vals.append(((round(float(dv), 6),), fmt_number(dv)))
-    if not vals:
-        return Result(direct.strip() or "Unable to determine.", 0.25,
+    return dv, direct
+
+
+def math(prompt: str, mode: str) -> Result:
+    """The coder model miscodes some problem shapes REPRODUCIBLY, so two
+    coder samples agreeing proves nothing (measured: both said 832.32 on a
+    task whose answer is 1672). Confidence now requires the coder's executed
+    program and the general model's independent answer to agree."""
+    v1 = _math_via_code(prompt, 0.2)
+    if mode == "panic":
+        if v1:
+            return Result(_math_answer(v1), 0.55,
+                          esc_suffix=_MATH_ESC, esc_max_tokens=200)
+        return Result("Unable to determine.", 0.2,
                       esc_suffix=_MATH_ESC, esc_max_tokens=200)
-    top, cnt = Counter(v[0] for v in vals).most_common(1)[0]
-    best = next(v for v in vals if v[0] == top)
-    conf = 0.8 if cnt >= 3 else (0.6 if cnt == 2 else 0.3)
-    return Result(_math_answer(best), conf,
-                  esc_suffix=_MATH_ESC, esc_max_tokens=200)
+
+    # completeness: a two-part question must yield two printed values
+    if v1 and len(v1[0]) < 2 and _MULTI_ASK_RE.search(prompt):
+        retry = _math_via_code(
+            prompt + "\nPrint EVERY value the question asks for, one per line.",
+            0.4)
+        if retry and len(retry[0]) > len(v1[0]):
+            v1 = retry
+
+    dv, direct = _math_direct_value(prompt, mode)
+
+    if v1 and dv is not None and any(abs(x - dv) < 0.01 for x in v1[0]):
+        # heterogeneous agreement: executed program ∧ independent reasoning
+        return Result(_math_answer(v1), 0.92,
+                      esc_suffix=_MATH_ESC, esc_max_tokens=200)
+    if v1 and dv is None:
+        v2 = _math_via_code(prompt, config.SC_TEMP, min_p=config.SC_MIN_P)
+        if v2 and v2[0] == v1[0]:
+            return Result(_math_answer(v1), 0.60,  # same-model only: capped
+                          esc_suffix=_MATH_ESC, esc_max_tokens=200)
+    # disagreement or missing halves — never trust, always escalate
+    fallback = (_math_answer(v1) if v1 else
+                (f"The answer is {fmt_number(dv)}." if dv is not None
+                 else direct.strip() or "Unable to determine."))
+    return Result(fallback, 0.35, esc_suffix=_MATH_ESC, esc_max_tokens=200)
 
 
 _MATH_ESC = (" Give the final answer(s) with brief working; if multiple values "
