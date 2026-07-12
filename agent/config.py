@@ -42,8 +42,10 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # their box at 6-8.5 tok/s CANNOT deliver gate-passing lean-local quality —
 # every grader run where local answered scored <=68%; the all-escalate path
 # measures 95-97.5% with the fixed batching. Local-first is earned only by a
-# genuinely healthy box (>=9 tok/s, e.g. dedicated EC2 at 9.5).
-TPS_DEAD = 9.0
+# genuinely healthy box (>=7 tok/s; the 0.6B decodes ~2.5x the 1.7B, so even
+# their contended box should read ~15-25 — 7-9 means lean mode, still ~250s
+# for 19 tasks, with the threshold/soft-deadline nets covering quality).
+TPS_DEAD = 7.0
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
