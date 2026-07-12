@@ -26,6 +26,9 @@ on:
       thresholds_json:
         description: "CATEGORY_THRESHOLDS_JSON override (A/B testing)"
         default: ""
+      allowed_models:
+        description: "ALLOWED_MODELS (the grading harness ALWAYS injects this; empty = absent)"
+        default: ""
 
 jobs:
   eval:
@@ -58,9 +61,11 @@ jobs:
           json.dump(slim, open(sys.argv[2], "w"), indent=1)
           EOF
           START=$(date +%s)
+          timeout --signal=KILL 600 \
           docker run --rm --cpus=${{ inputs.cpus }} --memory=4g --memory-swap=4g \
             -e FIREWORKS_API_KEY \
             -e FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1 \
+            -e ALLOWED_MODELS='${{ inputs.allowed_models }}' \
             -e SOFT_NEW_WORK_S=${{ inputs.soft_s }} \
             -e FLUSH_S=${{ inputs.flush_s }} \
             -e HARD_EXIT_S=${{ inputs.hard_s }} \
