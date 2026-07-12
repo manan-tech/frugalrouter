@@ -37,9 +37,12 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # below this, local quality/speed can't clear the gate — panic/starved-lean
 # answers score ~30-60% (grader-measured), so slow counts as dead and we
 # escalate everything (measured 95% via batches)
-TPS_DEAD = 6.0  # grader measured at 6-8.5 tok/s (telemetry bucket 542):
-                # lean-local is viable there (~500-700 tok, CI-proven quality);
-                # detectors + soft-deadline escalation guard the collapse case
+# GRADER-MEASURED VERDICT (two identical-digest runs: 36.8% and 68.4%):
+# their box at 6-8.5 tok/s CANNOT deliver gate-passing lean-local quality —
+# every grader run where local answered scored <=68%; the all-escalate path
+# measures 95-97.5% with the fixed batching. Local-first is earned only by a
+# genuinely healthy box (>=9 tok/s, e.g. dedicated EC2 at 9.5).
+TPS_DEAD = 9.0
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
