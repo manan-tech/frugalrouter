@@ -43,6 +43,18 @@ RUN mkdir -p /models/sentiment && \
     curl -fL --retry 3 -o /models/sentiment/config.json    "$SENT_REPO/config.json" && \
     ls -la /models/sentiment
 
+# Semantic ROUTER (all-MiniLM-L6-v2, int8 ONNX, 23MB). The regex classifier is the
+# single point of failure for the whole agent — every pipeline sits behind it — and
+# it only knows phrasings someone enumerated (measured 8/16 on paraphrases). The
+# finals re-run on REPHRASED prompts. Embeddings adjudicate the regex's `factual`
+# catch-all, which is where every misroute lands: hybrid scores 16/16 on
+# paraphrases while staying 19/19 + 10/10 on the real suites.
+ARG ROUTER_REPO="https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main"
+RUN mkdir -p /models/router && \
+    curl -fL --retry 3 -o /models/router/model.onnx     "$ROUTER_REPO/onnx/model_int8.onnx" && \
+    curl -fL --retry 3 -o /models/router/tokenizer.json "$ROUTER_REPO/tokenizer.json" && \
+    ls -la /models/router
+
 FROM --platform=linux/amd64 python:3.12-slim
 LABEL org.opencontainers.image.source="https://github.com/manan-tech/frugalrouter" \
       org.opencontainers.image.description="FrugalRouter - local-first token-efficient routing agent (AMD Hackathon ACT II Track 1)"

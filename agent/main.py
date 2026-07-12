@@ -10,7 +10,7 @@ import sys
 import threading
 
 from . import config, fireworks, lastresort, llm, pipelines
-from .classify import classify
+from .classify import classify_routed
 from .util import atomic_write_results, elapsed, log
 
 RESULTS = {}          # task_id -> answer string
@@ -291,7 +291,7 @@ def main() -> int:
     tps = llm.probe_tps() if servers_ok else 0.0
 
     # classify + sort by category so llama.cpp reuses cached prompt prefixes
-    tasks_c = sorted(((tid, classify(p), p) for tid, p in tasks),
+    tasks_c = sorted(((tid, classify_routed(p), p) for tid, p in tasks),
                      key=lambda t: t[1])
     log("categories: " + ", ".join(f"{tid}={cat}" for tid, cat, _ in tasks_c))
 
