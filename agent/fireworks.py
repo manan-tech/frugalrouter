@@ -338,7 +338,11 @@ def batch_chat(items, category: str) -> dict:
         return results
 
     reasoning, per_item = _esc_cap(category)
-    max_tokens = min(per_item * len(items),
+    # per-item budget is for the ANSWER; the JSON envelope ({"id": n, "answer":
+    # "..."}, quoting, escapes) costs ~40 tok/item plus ~60 for the array itself.
+    # Omitting it truncated batches mid-string -> 0 items parsed -> we paid for a
+    # dead batch AND N individual re-asks. Headroom here is strictly cheaper.
+    max_tokens = min(per_item * len(items) + 40 * len(items) + 60,
                      getattr(config, "BATCH_MAX_TOKENS_CLAMP", 2200))
     numbered = "\n".join(f"{i}. {p}" for i, (_tid, p) in enumerate(items, 1))
     hint = _CATEGORY_HINTS.get(category)

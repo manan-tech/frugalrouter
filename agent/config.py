@@ -56,11 +56,14 @@ ESCALATION_WORKERS = 4
 # spend tight — every category runs low reasoning; token ceilings scale with
 # how verbose a correct answer needs to be (code needs the most).
 ESC_CAPS = {
-    "factual": ("low", 160),
+    # 160 truncated 3-item factual batches mid-JSON -> 0/3 parsed -> we paid for
+    # the dead batch AND three individual re-asks (782 + 966 tok for 3 answers).
+    # A multi-part factual answer needs ~200 tok on its own.
+    "factual": ("low", 240),
     "sentiment": ("low", 120),
     "ner": ("low", 150),
     "summary": ("low", 320),
-    "math": ("low", 200),
+    "math": ("low", 240),   # same truncation double-bill measured on math batches
     "logic": ("low", 220),
     "code_gen": ("low", 500),
     "code_debug": ("low", 500),
