@@ -47,7 +47,8 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # genuinely healthy box (>=7 tok/s; the 0.6B decodes ~2.5x the 1.7B, so even
 # their contended box should read ~15-25 — 7-9 means lean mode, still ~250s
 # for 19 tasks, with the threshold/soft-deadline nets covering quality).
-TPS_DEAD = 7.0
+TPS_DEAD = 999.0  # v14: zero local trust — 4 grader fails implicated local answers;
+# every task escalates via the batched path (CI: 19/19 @ 4,607; emergency 12k budget)
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
