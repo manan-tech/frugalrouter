@@ -28,10 +28,12 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # Total Fireworks tokens we are willing to spend (input+output, from usage).
 # 0 => pure local zero-token mode.
 # cap, not target: the 0.6B profile spends ~1.7-2.6k with the calibrated
-# thresholds below. Sized so ner/math/sentiment batches never starve (they
-# starved at 2,600 in CI run 29179177766) while healthy spend still
-# undercuts the ~2,520-token all-API floor (Kestrel).
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "4000"))
+# thresholds below. Sized so the escalation tail never starves: wordy task
+# sets add truncation-repair individual retries on top of the batch lines
+# (public10 spent 3,821 incl. ~1.7k repair overhead and STILL starved the
+# ner batch at a 4,000 cap — runs 29179177766/29179420875). Healthy
+# rehearsal-shaped spend stays ~2.1k, under the ~2,520 all-API floor.
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "6000"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
