@@ -38,7 +38,7 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # (public10 spent 3,821 incl. ~1.7k repair overhead and STILL starved the
 # ner batch at a 4,000 cap — runs 29179177766/29179420875). Healthy
 # rehearsal-shaped spend stays ~2.1k, under the ~2,520 all-API floor.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "6000"))
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "0"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
@@ -52,7 +52,9 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # genuinely healthy box (>=7 tok/s; the 0.6B decodes ~2.5x the 1.7B, so even
 # their contended box should read ~15-25 — 7-9 means lean mode, still ~250s
 # for 19 tasks, with the threshold/soft-deadline nets covering quality).
-TPS_DEAD = 7.0
+TPS_DEAD = 0.0  # v16 PURE-LOCAL: proxy proven dead on grader (v12 and v13
+# scored IDENTICAL 57.9% despite v13 escalating far more) — there is nothing
+# to escalate TO, so never abandon local no matter how slow the box is.
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
