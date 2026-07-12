@@ -59,13 +59,28 @@ def _base_urls():
     return urls
 
 
+def _bare(model: str) -> str:
+    """Last path segment, punctuation-stripped — compares a harness-supplied id
+    to ours regardless of form ('accounts/fireworks/models/x' vs 'x' vs '"x"')."""
+    return model.rsplit("/", 1)[-1].strip().strip('"\'[]').lower()
+
+
 def allowed_models():
-    """ALLOWED_MODELS env (strict) or curated fallback chain."""
+    """ALLOWED_MODELS env (strict) or curated fallback chain.
+
+    The harness's id FORM is unknown (bare / fully-qualified / quoted). Matching
+    on the raw string made our preference order silently evaporate whenever the
+    forms differed — `ranked` came out empty and we fell back to THEIR order,
+    which can put non-serverless gemmas ahead of the models that actually
+    answer. Compare on the bare name so the ordering always holds."""
     env = os.environ.get("ALLOWED_MODELS", "").strip()
     if env:
-        listed = [m.strip() for m in env.split(",") if m.strip()]
-        ranked = [m for m in config.FALLBACK_MODELS if m in listed]
-        ranked += [m for m in listed if m not in ranked]
+        listed = [m.strip().strip('"\'[]') for m in env.split(",") if m.strip()]
+        listed = [m for m in listed if m]
+        pref = [_bare(m) for m in config.FALLBACK_MODELS]
+        # our frugality order first (kimi, minimax), then anything else allowed
+        ranked = sorted(listed, key=lambda m: pref.index(_bare(m))
+                        if _bare(m) in pref else len(pref))
         return ranked, True
     return list(config.FALLBACK_MODELS), False
 
