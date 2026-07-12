@@ -9,14 +9,19 @@ INPUT_PATH = os.environ.get("INPUT_PATH", "/input/tasks.json")
 OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "/output/results.json")
 
 # ---- local model servers ----
-GENERAL_MODEL_PATH = "/models/general.gguf"   # Qwen3-1.7B Q4_K_M
-CODER_MODEL_PATH = "/models/coder.gguf"       # Qwen2.5-Coder-1.5B-Instruct Q4_K_M
+GENERAL_MODEL_PATH = "/models/general.gguf"   # v15: Qwen2.5-3B-Instruct Q4_K_M
+CODER_MODEL_PATH = "/models/coder.gguf"       # absent in single-model image
 GENERAL_PORT = 8091
 CODER_PORT = 8092
 GENERAL_CTX = 2048   # long summarisation/NER passages must fit
 CODER_CTX = 1536     # code prompts are short; saves KV memory
 LLM_THREADS = 2
 SERVER_START_TIMEOUT_S = 60
+# v15: one general model answers every category; coder calls proxy to it
+# (no separate coder.gguf baked). The single 3B is more accurate than the
+# 0.6B+1.5B pair per-task, at the cost of ~2.3x slower decode — the lean
+# modes + escalation of hard tasks keep it inside the 10-min wall.
+SINGLE_MODEL = os.environ.get("SINGLE_MODEL", "1") == "1"
 
 # ---- wall clock (10-min hard limit upstream; env overrides are for the
 # local eval harness only — the grading harness never sets these) ----

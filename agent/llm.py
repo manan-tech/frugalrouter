@@ -238,17 +238,29 @@ def _start_one(server) -> bool:
     return server.wait_ready(config.SERVER_START_TIMEOUT_S)
 
 
+def _proxy_coder_to_general():
+    """Route all CODER.chat calls at the general server (one model, one
+    process). Reuses the coder-dead fallback path."""
+    CODER.stop()
+    CODER.proc = None
+    CODER.port = GENERAL.port
+    CODER.proxied = True
+
+
 def start_all() -> bool:
     # sequential startup halves the peak memory/CPU spike of model loading —
     # the grading env is tighter than it looks (no swap headroom)
     ok_g = _start_one(GENERAL)
+    if getattr(config, "SINGLE_MODEL", False):
+        # one general model serves every category; no separate coder process
+        if ok_g:
+            log("SINGLE_MODEL — general server handles all categories")
+            _proxy_coder_to_general()
+        return ok_g
     ok_c = _start_one(CODER)
     if ok_g and not ok_c:
         log("coder dead — general will handle code categories")
-        CODER.stop()
-        CODER.proc = None
-        CODER.port = GENERAL.port  # route coder calls to the general model
-        CODER.proxied = True
+        _proxy_coder_to_general()
         return True
     return ok_g and ok_c
 
@@ -278,10 +290,13 @@ def probe_tps() -> float:
         # snapshot the GENERAL call's server-side timings before the coder
         # call overwrites LAST_TIMINGS
         gen_timings = dict(LAST_TIMINGS)
-        CODER.chat(
-            [{"role": "user", "content":
-              "Write a python function that adds two numbers. Code only."}],
-            max_tokens=48, temperature=0.0, timeout_s=90)
+        if not getattr(CODER, "proxied", False):
+            # separate coder process — warm it too. When proxied (single-model
+            # or coder-dead) it IS the general server; skip the redundant call.
+            CODER.chat(
+                [{"role": "user", "content":
+                  "Write a python function that adds two numbers. Code only."}],
+                max_tokens=48, temperature=0.0, timeout_s=90)
     except Exception as e:
         log(f"warmup workout failed: {e}")
         return 0.0

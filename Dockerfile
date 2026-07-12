@@ -13,11 +13,12 @@ RUN mkdir -p /opt/llama && \
       --wildcards "llama-${LLAMA_TAG}/llama-server" "llama-${LLAMA_TAG}/*.so*" && \
     ls -la /opt/llama && test -f /opt/llama/llama-server
 
-ARG GENERAL_URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"
-ARG CODER_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+# v15 single-model experiment: ONE mid-size general model serves every
+# category (coder proxies to it via SINGLE_MODEL=1). Qwen2.5-3B-Instruct
+# Q4_K_M = 1.96 GB, fits 4 GB with room for KV; drops the separate coder.
+ARG GENERAL_URL="https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf"
 RUN mkdir -p /models && \
     curl -fL --retry 3 -o /models/general.gguf "$GENERAL_URL" && \
-    curl -fL --retry 3 -o /models/coder.gguf "$CODER_URL" && \
     ls -la /models
 
 FROM --platform=linux/amd64 python:3.12-slim
