@@ -20,10 +20,23 @@ _TOKENIZER = None
 _ID2LABEL = {}
 _INIT_TRIED = False
 
-# CoNLL types -> the label vocabulary our judge/answer format expects.
-_TYPE_MAP = {"PER": "PERSON", "ORG": "ORGANIZATION", "LOC": "LOCATION"}
-# MISC is deliberately dropped: it is noisy (nationalities, adjectives) and our
-# format has no matching bucket — a wrong label costs more than a missing one.
+# OntoNotes-v5 types -> the label vocabulary our answer format expects.
+# The model has a NATIVE DATE class, which is why it beats a CoNLL tagger here:
+# it catches relative dates ("last April", "three years ago", "Yesterday") that
+# no regex would enumerate.
+_TYPE_MAP = {
+    "PERSON": "PERSON",
+    "ORG": "ORGANIZATION",
+    "GPE": "LOCATION",      # geo-political entity (cities, countries)
+    "LOC": "LOCATION",
+    "FAC": "LOCATION",      # facility (airports, bridges)
+    "DATE": "DATE",
+    "EVENT": "EVENT",
+    "PRODUCT": "PRODUCT",
+}
+# Deliberately dropped (no bucket in our format; a wrong label costs more than a
+# missing one): NORP, TIME, MONEY, PERCENT, QUANTITY, ORDINAL, CARDINAL, LAW,
+# LANGUAGE, WORK_OF_ART.
 
 # DATE is not in the model's label set, so recognise it lexically. Ordered
 # longest-first; overlapping matches are suppressed by span containment.
@@ -128,7 +141,20 @@ def _model_spans(text: str):
             end = e
     if cur:
         spans.append((cur, start, end))
-    return [(text[s:e].strip(), t) for t, s, e in spans if text[s:e].strip()]
+
+    # Merge same-type spans separated only by whitespace: the tagger sometimes
+    # emits B- twice inside one name ("iPhone" + "15" -> "iPhone 15"). Requiring
+    # a whitespace-only gap keeps genuinely distinct neighbours apart, because
+    # those are separated by real tokens ("WHO and UNICEF").
+    merged = []
+    for t, s, e in spans:
+        if merged:
+            pt, ps, pe = merged[-1]
+            if pt == t and not text[pe:s].strip() and s - pe <= 1:
+                merged[-1] = (pt, ps, e)
+                continue
+        merged.append((t, s, e))
+    return [(text[s:e].strip(), t) for t, s, e in merged if text[s:e].strip()]
 
 
 def _date_spans(text: str):
@@ -148,7 +174,13 @@ def extract(text: str):
     if not available():
         return None
     try:
-        ents = _model_spans(text) + _date_spans(text)
+        ents = _model_spans(text)
+        # The model tags DATE natively and does it better than any regex could
+        # (relative dates). The regex is a pure backstop for numeric formats
+        # like 03/05/2022 — only consulted when the model found no date at all,
+        # so the two can never emit overlapping spans for the same date.
+        if not any(t == "DATE" for _s, t in ents):
+            ents = ents + _date_spans(text)
         seen, out = set(), []
         for surface, typ in ents:
             key = (surface.lower(), typ)

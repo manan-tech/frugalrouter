@@ -20,11 +20,14 @@ RUN mkdir -p /models && \
     curl -fL --retry 3 -o /models/coder.gguf "$CODER_URL" && \
     ls -la /models
 
-# Purpose-trained NER (dslim/bert-base-NER, Xenova ONNX int8 ~108MB). Beats the
-# 0.6B at entity tagging for zero tokens and ~30ms of CPU.
-ARG NER_REPO="https://huggingface.co/Xenova/bert-base-NER/resolve/main"
+# Purpose-trained NER: OntoNotes-v5 BERT (int8 ONNX, ~104MiB). Chosen over the
+# CoNLL ports because it has a NATIVE DATE class (catches "last April",
+# "three years ago", "Yesterday" — which no regex enumerates) plus EVENT and
+# PRODUCT, exactly the label set our answer format needs. Zero tokens, ~10ms.
+# The repo has NO model.onnx — model_quantized.onnx is the only ONNX file.
+ARG NER_REPO="https://huggingface.co/zencrazycat/ner-bert-base-cased-ontonotesv5-englishv4-onnx/resolve/main"
 RUN mkdir -p /models/ner && \
-    curl -fL --retry 3 -o /models/ner/model.onnx     "$NER_REPO/onnx/model_int8.onnx" && \
+    curl -fL --retry 3 -o /models/ner/model.onnx     "$NER_REPO/onnx/model_quantized.onnx" && \
     curl -fL --retry 3 -o /models/ner/tokenizer.json "$NER_REPO/tokenizer.json" && \
     curl -fL --retry 3 -o /models/ner/config.json    "$NER_REPO/config.json" && \
     ls -la /models/ner
