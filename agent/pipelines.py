@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from . import config, ner_onnx
+from . import config, ner_onnx, sentiment_onnx
 from .llm import CODER, GENERAL
 from .sandbox import run_python, run_with_tests
 from .util import (extract_code, extract_last_number, fmt_number, log,
@@ -244,6 +244,30 @@ _LABEL_RE = re.compile(r"^(Positive|Negative|Neutral|Mixed)\b", re.IGNORECASE)
 
 
 def sentiment(prompt: str, mode: str) -> Result:
+    # The 0.6B reliably gets the LABEL wrong (Mixed->Negative, Neutral->Positive)
+    # and few-shot did not fix it — but the REASON it writes is fine. So let a
+    # purpose-trained classifier decide the label and ask the LLM only to justify
+    # that fixed label. Mixed is derived clause-wise inside sentiment_onnx.
+    label = sentiment_onnx.classify(prompt)
+    if label:
+        try:
+            reason = GENERAL.chat(
+                [{"role": "system", "content":
+                  f"The sentiment of the user's text has ALREADY been determined "
+                  f"to be {label}. Write ONLY a single short clause (no label, no "
+                  f"preamble) explaining why it is {label}. If it is Mixed, name "
+                  f"BOTH the positive and the negative aspect."},
+                 {"role": "user", "content": prompt}],
+                max_tokens=60, temperature=0.2).strip()
+            reason = reason.split("\n")[0].strip(' -"')
+            if len(reason) >= 12:
+                # deterministic label + grounded reason: trust it, stay local
+                return Result(f"{label} - {reason}", 0.93, esc_max_tokens=160)
+        except Exception as e:  # noqa: BLE001
+            log(f"sentiment: reason generation failed ({e})")
+        return Result(f"{label} - the text conveys {label.lower()} sentiment.",
+                      0.8, esc_max_tokens=160)
+
     n = _samples_for(mode, 2, 2)
     outs, labels = [], []
     for i in range(n):
@@ -378,6 +402,19 @@ def _summary_ok(out: str, kind, n):
 # --------------------------------------------------------------------------
 # NER
 # --------------------------------------------------------------------------
+_MONTHS_RE = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", re.IGNORECASE)
+
+
+def _is_solid_entity(surface: str) -> bool:
+    """Self-evidently a real entity: a proper noun, a number, or a month."""
+    s = surface.strip()
+    if not s:
+        return False
+    return (s[0].isupper() or any(c.isdigit() for c in s)
+            or bool(_MONTHS_RE.search(s)))
+
+
 NER_SYS = ('Extract all named entities from the given text. Output one entity '
            'per line, formatted exactly as "Entity | TYPE". Allowed types: '
            'PERSON, ORGANIZATION, LOCATION, DATE, EVENT, PRODUCT. '
@@ -391,6 +428,29 @@ def ner(prompt: str, mode: str) -> Result:
     # Tesla a PRODUCT and missed Zurich, at 0.9 confidence). ~30ms on CPU, zero
     # tokens. Dates come from a regex pass — the CoNLL label set has no DATE.
     ents = ner_onnx.extract(prompt)
+    if ents:
+        # Cross-verification (heterogeneous, like math): the tagger has the better
+        # recall and types, but over-tags ("quarterly" as a DATE), and a spurious
+        # entity fails the task just like a missing one. So a tagger entity that
+        # is NOT a proper noun / date-like must also be seen by the LLM to survive.
+        # Solid entities (capitalised, digits, month names) never need the vote,
+        # so the LLM can't delete a correct WHO/Zurich the way it used to miss them.
+        weak = [e for e, _t in ents if not _is_solid_entity(e)]
+        llm_ents = set()
+        if weak:
+            try:
+                o = GENERAL.chat(
+                    [{"role": "system", "content": NER_SYS},
+                     {"role": "user", "content": prompt}],
+                    max_tokens=110, temperature=0.15)
+                llm_ents = {m.group(1).strip().lower()
+                            for m in _NER_LINE.finditer(o)}
+            except Exception as e:  # noqa: BLE001
+                log(f"ner: cross-check failed ({e}) — keeping tagger output")
+                llm_ents = {w.lower() for w in weak}   # fail open, never delete
+        ents = [(e, t) for e, t in ents
+                if _is_solid_entity(e) or e.lower() in llm_ents]
+
     if ents:
         lines = []
         seen = set()

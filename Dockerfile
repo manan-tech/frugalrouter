@@ -32,6 +32,17 @@ RUN mkdir -p /models/ner && \
     curl -fL --retry 3 -o /models/ner/config.json    "$NER_REPO/config.json" && \
     ls -la /models/ner
 
+# Sentiment classifier (roberta, int8 ONNX ~126MB). The 0.6B reliably mislabels
+# sentiment (Mixed->Negative, Neutral->Positive) and few-shot did NOT fix it, but
+# it writes a fine REASON. So the classifier decides the label and the LLM only
+# justifies it. Mixed is derived clause-wise (some clause positive, another negative).
+ARG SENT_REPO="https://huggingface.co/Xenova/twitter-roberta-base-sentiment-latest/resolve/main"
+RUN mkdir -p /models/sentiment && \
+    curl -fL --retry 3 -o /models/sentiment/model.onnx     "$SENT_REPO/onnx/model_int8.onnx" && \
+    curl -fL --retry 3 -o /models/sentiment/tokenizer.json "$SENT_REPO/tokenizer.json" && \
+    curl -fL --retry 3 -o /models/sentiment/config.json    "$SENT_REPO/config.json" && \
+    ls -la /models/sentiment
+
 FROM --platform=linux/amd64 python:3.12-slim
 LABEL org.opencontainers.image.source="https://github.com/manan-tech/frugalrouter" \
       org.opencontainers.image.description="FrugalRouter - local-first token-efficient routing agent (AMD Hackathon ACT II Track 1)"

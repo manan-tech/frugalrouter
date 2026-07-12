@@ -118,7 +118,7 @@ def _esc_threshold(cat, override):
 # subset — v13's extra groups never got their turn. Firing every always-remote
 # category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
 # instead of the last 70 seconds of it.
-EARLY_REMOTE_CATS = ("factual", "sentiment", "summary", "code_debug")
+EARLY_REMOTE_CATS = ("factual", "summary", "code_debug")
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
