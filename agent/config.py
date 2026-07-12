@@ -77,9 +77,8 @@ ESC_CAPS = {
 # -> 0.90. Code and logic keep the 0.40 safety net — their verifiers are
 # deterministic (executed cross-impls / brute-forced constraints).
 CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.95, "code_gen": 0.40,
-                       "logic": 0.40, "math": 0.65, "ner": 0.95,
-                       "sentiment": 0.90, "summary": 0.90,
-                       }
+                       "logic": 0.40, "math": 0.65, "ner": 0.40,
+                       "sentiment": 0.60, "summary": 0.90}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")

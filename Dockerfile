@@ -20,11 +20,24 @@ RUN mkdir -p /models && \
     curl -fL --retry 3 -o /models/coder.gguf "$CODER_URL" && \
     ls -la /models
 
+# Purpose-trained NER (dslim/bert-base-NER, Xenova ONNX int8 ~108MB). Beats the
+# 0.6B at entity tagging for zero tokens and ~30ms of CPU.
+ARG NER_REPO="https://huggingface.co/Xenova/bert-base-NER/resolve/main"
+RUN mkdir -p /models/ner && \
+    curl -fL --retry 3 -o /models/ner/model.onnx     "$NER_REPO/onnx/model_int8.onnx" && \
+    curl -fL --retry 3 -o /models/ner/tokenizer.json "$NER_REPO/tokenizer.json" && \
+    curl -fL --retry 3 -o /models/ner/config.json    "$NER_REPO/config.json" && \
+    ls -la /models/ner
+
 FROM --platform=linux/amd64 python:3.12-slim
 LABEL org.opencontainers.image.source="https://github.com/manan-tech/frugalrouter" \
       org.opencontainers.image.description="FrugalRouter - local-first token-efficient routing agent (AMD Hackathon ACT II Track 1)"
 RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 libcurl4 && \
     rm -rf /var/lib/apt/lists/*
+# onnxruntime + tokenizers power the local NER extractor (agent/ner_onnx.py).
+# Both are optional at runtime: if the import fails, ner() falls back to the LLM.
+RUN pip install --no-cache-dir onnxruntime==1.27.0 tokenizers==0.23.1 && \
+    rm -rf /root/.cache/pip
 
 COPY --from=dl /opt/llama /opt/llama
 COPY --from=dl /models /models

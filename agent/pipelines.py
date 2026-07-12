@@ -12,7 +12,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from . import config
+from . import config, ner_onnx
 from .llm import CODER, GENERAL
 from .sandbox import run_python, run_with_tests
 from .util import (extract_code, extract_last_number, fmt_number, log,
@@ -207,7 +207,37 @@ SENTIMENT_SYS = ("Classify the sentiment of the given text as Positive, Negative
                  "Neutral, or Mixed, then give a one-sentence reason. If the text "
                  "contains BOTH good and bad aspects, never label it Negative — "
                  "use Mixed (or Positive if the outcome is good) and the reason "
-                 "must explicitly mention both the negative and positive aspects.")
+                 "must explicitly mention both the negative and positive aspects. "
+                 "A purely factual statement with no evaluative language is Neutral.")
+
+# Few-shot exemplars. A 0.6B follows demonstrations far better than rules: its
+# two measured failures were exactly these shapes — it called a both-good-and-bad
+# review "Negative" (should be Mixed) and a flat factual line "Positive" (should
+# be Neutral). Each example also models the required "<Label> - <reason>" format
+# and, for Mixed, a reason naming BOTH sides.
+SENTIMENT_SHOTS = [
+    ("The food was delicious but we waited nearly an hour to be served.",
+     "Mixed - the food quality was excellent while the long wait for service "
+     "was a clear negative."),
+    ("The parcel was delivered on the scheduled date.",
+     "Neutral - it states a delivery fact with no positive or negative "
+     "evaluation."),
+    ("Absolutely brilliant workshop — I learned more in a day than in a month.",
+     "Positive - it praises the workshop enthusiastically with no drawbacks "
+     "mentioned."),
+    ("The app crashes constantly and support never replies.",
+     "Negative - it reports repeated crashes and unresponsive support with "
+     "nothing favourable."),
+]
+
+
+def _sentiment_msgs(prompt: str):
+    msgs = [{"role": "system", "content": SENTIMENT_SYS}]
+    for u, a in SENTIMENT_SHOTS:
+        msgs.append({"role": "user", "content": u})
+        msgs.append({"role": "assistant", "content": a})
+    msgs.append({"role": "user", "content": prompt})
+    return msgs
 SENTIMENT_GRAMMAR = r'''root ::= label " - " [^\n]{12,220}
 label ::= "Positive" | "Negative" | "Neutral" | "Mixed"'''
 _LABEL_RE = re.compile(r"^(Positive|Negative|Neutral|Mixed)\b", re.IGNORECASE)
@@ -218,8 +248,7 @@ def sentiment(prompt: str, mode: str) -> Result:
     outs, labels = [], []
     for i in range(n):
         o = GENERAL.chat(
-            [{"role": "system", "content": SENTIMENT_SYS},
-             {"role": "user", "content": prompt}],
+            _sentiment_msgs(prompt),
             max_tokens=70, temperature=0.2 if i == 0 else config.GEN_TEMP,
             grammar=SENTIMENT_GRAMMAR)
         outs.append(o)
@@ -229,8 +258,7 @@ def sentiment(prompt: str, mode: str) -> Result:
         return Result(outs[0], 0.85, esc_max_tokens=160)
     if n > 1:  # tie-break vote
         o3 = GENERAL.chat(
-            [{"role": "system", "content": SENTIMENT_SYS},
-             {"role": "user", "content": prompt}],
+            _sentiment_msgs(prompt),
             max_tokens=70, temperature=config.SC_TEMP,
             min_p=config.SC_MIN_P, grammar=SENTIMENT_GRAMMAR)
         outs.append(o3)
@@ -359,6 +387,25 @@ _NER_LINE = re.compile(r"^(.{1,60}?)\s*\|\s*(Person|Organization|Location|Date|E
 
 
 def ner(prompt: str, mode: str) -> Result:
+    # A purpose-trained BERT crushes a 0.6B at entity tagging (the LLM labelled
+    # Tesla a PRODUCT and missed Zurich, at 0.9 confidence). ~30ms on CPU, zero
+    # tokens. Dates come from a regex pass — the CoNLL label set has no DATE.
+    ents = ner_onnx.extract(prompt)
+    if ents:
+        lines = []
+        seen = set()
+        for surface, typ in ents:
+            surface = _expand_span(surface, prompt)
+            key = (surface.lower(), typ)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(f"{surface} | {typ}")
+        if lines:
+            # deterministic extractor, not a sampled guess — trust it and stay
+            # local. 0.93 clears every threshold, so it never escalates.
+            return Result("\n".join(lines), 0.93, esc_max_tokens=200)
+
     n = _samples_for(mode, 2, 2)
     parsed = []
     for i in range(n):
