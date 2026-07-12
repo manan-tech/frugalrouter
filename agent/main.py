@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import threading
+import time
 
 from . import config, fireworks, lastresort, llm, pipelines
 from .classify import classify_routed
@@ -159,15 +160,24 @@ def early_escalate(tasks_c):
         for tid, cat, prompt in tasks_c:
             if cat in EARLY_REMOTE_CATS:
                 groups.setdefault(cat, []).append((tid, prompt))
+        # CHEAPEST-FIRST LAUNCH. The batches run concurrently, but if their proxy
+        # is slow or the budget runs dry, whatever is still queued gets cut. So
+        # start the cheap, high-yield categories first (sentiment/ner/factual are
+        # ~150-250 tok each and near-certain PASSes) and let the expensive ones
+        # (code_gen/code_debug/summary, 400-550 tok) be the ones that get dropped.
+        # Banking 5 cheap correct answers beats banking 2 expensive ones.
+        order = sorted(groups.items(),
+                       key=lambda kv: fireworks._esc_cap(kv[0])[1])
         # Categories go CONCURRENTLY: these are network-bound calls, and a slow
         # proxy would otherwise serialize them back into the same wall-clock
         # squeeze this function exists to escape. They contend for nothing
         # local (BUDGET is lock-protected; flush is atomic; RESULTS/CONF writes
         # are per-task and guarded by the EARLY_CONF ordering rule).
         threads = [threading.Thread(target=_one, args=(c, m), daemon=True)
-                   for c, m in groups.items()]
+                   for c, m in order]
         for t in threads:
             t.start()
+            time.sleep(0.05)   # preserve launch order under a slow proxy
         for t in threads:
             t.join(timeout=max(5.0, config.FLUSH_S - 40 - elapsed()))
     except Exception as e:  # noqa: BLE001 — insurance must never hurt
