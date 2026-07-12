@@ -399,8 +399,15 @@ def main() -> int:
             except Exception as e:  # noqa: BLE001
                 log(f"anytime error on {tid}: {e}")
 
-    # second escalation pass: leftover budget goes to anything still shaky
-    escalate_candidates(tasks_meta, threshold=0.60)
+    # second escalation pass: a SAFETY NET for tasks the first pass could not
+    # cover (budget/time), NOT a second opinion. It used to hardcode
+    # threshold=0.60, which silently overrode the per-category thresholds and
+    # re-escalated categories the local model earns outright — measured on the
+    # 3B at grader speed: 1,223 wasted tokens (code_gen 272 + math 505 +
+    # ner 446), and the remote ner answer OVERWROTE a correct local one,
+    # turning ner 2/2 into 1/2. Passing None reuses the per-category
+    # thresholds, so anything already answered is no longer a candidate.
+    escalate_candidates(tasks_meta)
 
     # last-ditch sweep: nothing may ship as fallback text while budget remains
     for tid, cat, prompt, res in tasks_meta:
