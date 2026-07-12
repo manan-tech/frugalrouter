@@ -102,6 +102,48 @@ def _esc_threshold(cat, override):
     return thr.get(cat, config.ESCALATE_CONF_THRESHOLD)
 
 
+# Categories that provably always escalate under the baked thresholds:
+# factual's pipeline caps confidence at 0.50 (< its 0.55 threshold) and
+# ner's local tiers top out at 0.9 (< its 0.95 threshold). Firing their
+# batches at ~t+15s hides Fireworks latency behind local decode and moves
+# them out of the FLUSH_S danger zone (slow-proxy insurance).
+EARLY_REMOTE_CATS = ("factual", "ner")
+# Written above every local confidence tier (max 0.92) so a racing local
+# pipeline result can never overwrite an early remote answer, AND above the
+# strictest category threshold (ner 0.95) so the normal escalation pass
+# never re-escalates (double-bills) an early-answered task.
+EARLY_CONF = 0.96
+
+
+def early_escalate(tasks_c):
+    """Batch the always-remote categories to Fireworks on a side thread while
+    local decode runs. Failure-contained by design: on any error, state is
+    exactly as if this never ran — CONF stays 0 and the normal escalation
+    pass covers the same tasks (BUDGET is lock-protected; flush is atomic)."""
+    try:
+        groups = {}
+        for tid, cat, prompt in tasks_c:
+            if cat in EARLY_REMOTE_CATS:
+                groups.setdefault(cat, []).append((tid, prompt))
+        for cat, members in groups.items():
+            if elapsed() > config.FLUSH_S - 60:
+                return
+            suffix = pipelines.FACTUAL_ESC if cat == "factual" else ""
+            answers = fireworks.batch_chat(
+                [(tid, prompt + suffix) for tid, prompt in members], cat)
+            got = 0
+            for tid, _prompt in members:
+                ans = answers.get(tid)
+                if ans and ans.strip():
+                    RESULTS[tid] = ans.strip()
+                    CONF[tid] = EARLY_CONF
+                    got += 1
+            flush()
+            log(f"early batch[{cat}] answered {got}/{len(members)}")
+    except Exception as e:  # noqa: BLE001 — insurance must never hurt
+        log(f"early escalation error (non-fatal): {e}")
+
+
 def escalate_candidates(tasks_meta, threshold=None):
     # mass-fallback promotion: if most answers are dead (conf<0.1), local
     # inference failed in some way we didn't catch — the normal budget can
@@ -238,6 +280,10 @@ def main() -> int:
             f"— emergency escalation of all tasks")
         fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
 
+    if local_usable and config.ESCALATION_BUDGET_TOKENS > 0:
+        threading.Thread(target=early_escalate, args=(tasks_c,),
+                         daemon=True).start()
+
     tasks_meta = []
     if local_usable:
         done = 0
@@ -253,10 +299,20 @@ def main() -> int:
                 needed = fireworks.BUDGET.spent + (len(tasks_c) - done) * 260
                 fireworks.raise_budget(min(config.EMERGENCY_BUDGET_TOKENS, needed))
                 break
+            if CONF.get(tid, 0) >= EARLY_CONF:
+                # already answered by the early-escalation thread — skip the
+                # local pipeline entirely (that's the wall-clock win)
+                tasks_meta.append((tid, cat, prompt,
+                                   pipelines.Result(RESULTS[tid], CONF[tid],
+                                                    esc_max_tokens=300)))
+                done += 1
+                log(f"[{done}/{len(tasks_c)}] {tid} ({cat}) early-answered remotely")
+                continue
             mode = pick_mode(tps, len(tasks_c) - done)
             res = pipelines.run_task(cat, prompt, mode)
-            RESULTS[tid] = res.answer or _FALLBACK
-            CONF[tid] = res.confidence
+            if res.confidence > CONF.get(tid, 0):
+                RESULTS[tid] = res.answer or _FALLBACK
+                CONF[tid] = res.confidence
             tasks_meta.append((tid, cat, prompt, res))
             emit_calibration(tid, cat, res)
             flush()

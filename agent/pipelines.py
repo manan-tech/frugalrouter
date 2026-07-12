@@ -39,6 +39,13 @@ FACTUAL_SYS = ("You are a precise assistant. Answer the question directly and "
                "parts, answer every part.")
 
 
+# Static escalation format hint for factual — shared with main.early_escalate,
+# which fires factual batches before any pipeline has produced a Result.
+FACTUAL_ESC = (" Lead with the direct answer covering every "
+               "part asked; one short sentence per part; "
+               "no hedging.")
+
+
 def factual(prompt: str, mode: str) -> Result:
     n = _samples_for(mode, 3, 2)
     outs = []
@@ -55,11 +62,7 @@ def factual(prompt: str, mode: str) -> Result:
     # escalates when budget allows (cheapest category to fix remotely),
     # and the local majority answer stands as the fallback.
     conf = {3: 0.50, 2: 0.45, 1: 0.30}.get(agree, 0.40)
-    return Result(best, conf,
-                  esc_suffix=(" Lead with the direct answer covering every "
-                              "part asked; one short sentence per part; "
-                              "no hedging."),
-                  esc_max_tokens=160)
+    return Result(best, conf, esc_suffix=FACTUAL_ESC, esc_max_tokens=160)
 
 
 def _majority_by_similarity(outs):
