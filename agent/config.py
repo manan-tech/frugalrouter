@@ -33,7 +33,7 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # (public10 spent 3,821 incl. ~1.7k repair overhead and STILL starved the
 # ner batch at a 4,000 cap — runs 29179177766/29179420875). Healthy
 # rehearsal-shaped spend stays ~2.1k, under the ~2,520 all-API floor.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "6000"))
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "12000"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
@@ -79,9 +79,9 @@ ESC_CAPS = {
 # sentiment's 0.85 tier holds judgment misses (s4 positive-vs-neutral)
 # -> 0.90. Code and logic keep the 0.40 safety net — their verifiers are
 # deterministic (executed cross-impls / brute-forced constraints).
-CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.95, "code_gen": 0.40,
-                       "logic": 0.40, "math": 0.65, "ner": 0.40,
-                       "sentiment": 0.40, "summary": 0.90}
+CATEGORY_THRESHOLDS = {"factual": 0.99, "code_debug": 0.99, "code_gen": 0.99,
+                       "logic": 0.99, "math": 0.99, "ner": 0.99,
+                       "sentiment": 0.99, "summary": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")
