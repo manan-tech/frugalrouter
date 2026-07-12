@@ -49,7 +49,11 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # for 19 tasks, with the threshold/soft-deadline nets covering quality).
 TPS_DEAD = 7.0
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
-ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
+# The grading env enforces a ~30s PER-REQUEST limit. A 45s timeout meant we sat
+# waiting on a request their proxy had already killed, burning the window we could
+# have spent retrying on another model. 26s fails fast, INSIDE their limit, and
+# still leaves room for a fall-through retry.
+ESCALATION_TIMEOUT_S = 26
 ESCALATION_WORKERS = 4
 
 # Per-category escalation caps: (reasoning_effort, max_tokens). Keeps remote
@@ -94,6 +98,12 @@ if _thr_env:
         pass
 # Batch multiple escalation questions into one remote chat when possible.
 BATCH_ESCALATION = True
+# Hard cap on items per batch. With a ~30s per-request limit, one big batch is a
+# single point of failure: our largest (code_gen n=3, ~1,200 output tokens) took
+# 9.7s on the FAST public API — a slow proxy could push that past 30s and the
+# whole batch dies at once. Two smaller requests each finish well inside the
+# window, and if one dies the other still lands.
+BATCH_MAX_ITEMS = 2
 # ceiling on any single batched call's max_tokens (truncation-safety)
 BATCH_MAX_TOKENS_CLAMP = 2200
 

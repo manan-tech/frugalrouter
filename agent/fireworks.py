@@ -333,6 +333,25 @@ def batch_chat(items, category: str) -> dict:
     items = list(items)
     if not items:
         return results
+    # Split oversized batches: with a ~30s per-request cap, a single long request
+    # is all-or-nothing. Chunking keeps every call comfortably inside the window.
+    # A single-item "batch" is a false economy: wrapping one question in a JSON
+    # array confuses the model (measured: "1/1 unparsed" -> individual re-ask ->
+    # we pay TWICE). Ask it directly instead.
+    if len(items) == 1:
+        return _batch_individual(items, category, _esc_cap(category)[1])
+    # Split oversized batches: with a ~30s per-request cap, one long request is
+    # all-or-nothing. Chunking keeps every call comfortably inside the window.
+    # Chunks are balanced (3 -> 2+1 becomes 2+1 handled above; 5 -> 3+2 not 2+2+1)
+    # so we never manufacture a wasteful singleton when a pair would do.
+    cap = getattr(config, "BATCH_MAX_ITEMS", 0)
+    if cap and len(items) > cap:
+        n = len(items)
+        k = (n + cap - 1) // cap                  # number of chunks
+        size = (n + k - 1) // k                   # balanced chunk size
+        for i in range(0, n, size):
+            results.update(batch_chat(items[i:i + size], category))
+        return results
     if not os.environ.get("FIREWORKS_API_KEY", ""):
         log("batch escalation skipped: no FIREWORKS_API_KEY")
         return results
