@@ -27,10 +27,11 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # ---- escalation ----
 # Total Fireworks tokens we are willing to spend (input+output, from usage).
 # 0 => pure local zero-token mode.
-# cap, not target: healthy runs spend ~400-700. Sized so that even a
-# harder-than-expected task set can escalate every weak answer and still
-# undercut the leaderboard's ~1,400-token top entries.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "1300"))
+# cap, not target: the 0.6B profile spends ~1.7-2.6k with the calibrated
+# thresholds below. Sized so ner/math/sentiment batches never starve (they
+# starved at 2,600 in CI run 29179177766) while healthy spend still
+# undercuts the ~2,520-token all-API floor (Kestrel).
+ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "4000"))
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
 EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
@@ -64,12 +65,16 @@ ESC_CAPS = {
 # ESCALATE_CONF_THRESHOLD for every category; calibration overwrites these
 # later. Kept in sync with ESC_CAPS keys.
 # factual: conf is capped at 0.50 in its pipeline, so 0.55 = always escalate
-# (the only measured accuracy hole escalation actually fixes). Everything else
-# keeps only a 0.40 safety net for genuinely-broken local answers — measured
-# reliable confs (0.70-0.92) stay local at zero tokens.
+# (sample agreement can't verify facts). 0.6B calibration from CI runs
+# 29178846470 + 29179178458: math's 0.60 tier is ~50% wrong -> 0.65 escalates
+# it; ner is confidently wrong at 0.9 (Tesla=PRODUCT, missed Zurich; the
+# 1.7B's ~1.00 ceiling does NOT carry over) -> 0.95 = always escalate;
+# sentiment's 0.85 tier holds judgment misses (s4 positive-vs-neutral)
+# -> 0.90. Code and logic keep the 0.40 safety net — their verifiers are
+# deterministic (executed cross-impls / brute-forced constraints).
 CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.40, "code_gen": 0.40,
-                       "logic": 0.40, "math": 0.40, "ner": 0.40,
-                       "sentiment": 0.40, "summary": 0.40}
+                       "logic": 0.40, "math": 0.65, "ner": 0.95,
+                       "sentiment": 0.90, "summary": 0.40}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")
