@@ -39,6 +39,10 @@ _INIT_TRIED = False
 # only ever consulted on the regex's factual CATCH-ALL, and a genuine factual still
 # matches its own exemplars far higher (0.42-0.52) than any rival category.
 _MIN_SIM = 0.22
+# The embedding must beat the regex's incumbent "factual" verdict by THIS much
+# before we override it. Real paraphrases win by 0.2-0.4; coin flips (f3: 0.005)
+# do not. Platform float noise cannot cross a gap this wide.
+_MARGIN = 0.06
 
 # Exemplars per category — deliberately varied WORDING for the same INTENT, since
 # that is precisely what the router must generalise over.
@@ -203,10 +207,28 @@ def route(prompt: str):
         v = _embed(_instruction(prompt))             # (1, dim), normalised
         labels, protos = _PROTOS
         sims = (protos @ v.T).ravel()                # cosine, both normalised
-        best = int(sims.argmax())
-        if float(sims[best]) < _MIN_SIM:
+
+        # best similarity PER CATEGORY (each has several exemplars)
+        best = {}
+        for lab, s in zip(labels, sims):
+            f = float(s)
+            if f > best.get(lab, -1.0):
+                best[lab] = f
+        top = max(best, key=best.get)
+        if best[top] < _MIN_SIM:
             return None                              # too far from everything
-        return labels[best], float(sims[best])
+
+        # MARGIN RULE. route() is only consulted AFTER the regex said "factual",
+        # so factual is the incumbent — override it only on a CLEAR win, never on
+        # a rounding error. Measured: f3 ("What does HTTP stand for, and what is
+        # it used for?") scored summary 0.215 vs factual 0.210 — a 0.005 gap, and
+        # amd64-vs-arm64 float noise flipped it, misrouting a factual task into
+        # the summary pipeline. A genuine paraphrase wins by a mile (ner and
+        # sentiment beat factual by 0.2-0.4), so the margin costs real rescues
+        # nothing and kills the coin flips.
+        if top != "factual" and (best[top] - best.get("factual", 0.0)) < _MARGIN:
+            return None                              # too close to call — keep factual
+        return top, best[top]
     except Exception as e:  # noqa: BLE001
         log(f"router: inference failed ({e}) — regex routing only")
         return None
