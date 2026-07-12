@@ -13,7 +13,7 @@ RUN mkdir -p /opt/llama && \
       --wildcards "llama-${LLAMA_TAG}/llama-server" "llama-${LLAMA_TAG}/*.so*" && \
     ls -la /opt/llama && test -f /opt/llama/llama-server
 
-ARG GENERAL_URL="https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf"
+ARG GENERAL_URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"
 ARG CODER_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
 RUN mkdir -p /models && \
     curl -fL --retry 3 -o /models/general.gguf "$GENERAL_URL" && \
