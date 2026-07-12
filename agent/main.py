@@ -102,12 +102,27 @@ def _esc_threshold(cat, override):
     return thr.get(cat, config.ESCALATE_CONF_THRESHOLD)
 
 
-# Categories that provably always escalate under the baked thresholds:
-# factual's pipeline caps confidence at 0.50 (< its 0.55 threshold) and
-# ner's local tiers top out at 0.9 (< its 0.95 threshold). Firing their
-# batches at ~t+15s hides Fireworks latency behind local decode and moves
-# them out of the FLUSH_S danger zone (slow-proxy insurance).
-EARLY_REMOTE_CATS = ("factual", "ner")
+# Categories that provably always escalate under the baked thresholds — their
+# local confidence ceiling sits BELOW their threshold, so the late pass would
+# escalate them anyway:
+# v18 (3B): grader-speed measurement (run 29189152385, 6.3 tok/s) showed the
+# 3B answers code_debug 2/2, code_gen 3/3, factual 3/3, logic 2/2, math 3/3,
+# ner 2/2 PURELY LOCALLY — 15/15 at zero tokens. Its only holes are
+# sentiment (0/2) and summary (1/2). So ONLY those go remote, plus factual
+# (whose conf is capped at 0.50 by design — sample agreement cannot verify a
+# fact, and 3/3 on one draw is not evidence enough to trust it blind).
+# Local drops 19 -> 12 tasks, which also erases the soft-deadline squeeze.
+#
+# v17 — WHY ALL OF THEM FIRE EARLY NOW. On a slow grader box local runs until
+# the soft deadline (~423s measured at 7.6 tok/s), so the late escalation pass
+# inherits only a ~70s window before FLUSH_S. It is ordered cheapest-category-
+# first, so the EXPENSIVE groups (code_debug, summary) sit last and get cut by
+# the flush. That is why v12 and v13 scored IDENTICAL 57.9% on the grader
+# despite v13 escalating far more: both only ever executed the same cheap
+# subset — v13's extra groups never got their turn. Firing every always-remote
+# category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
+# instead of the last 70 seconds of it.
+EARLY_REMOTE_CATS = ("factual", "sentiment", "summary")
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
@@ -120,12 +135,9 @@ def early_escalate(tasks_c):
     local decode runs. Failure-contained by design: on any error, state is
     exactly as if this never ran — CONF stays 0 and the normal escalation
     pass covers the same tasks (BUDGET is lock-protected; flush is atomic)."""
-    try:
-        groups = {}
-        for tid, cat, prompt in tasks_c:
-            if cat in EARLY_REMOTE_CATS:
-                groups.setdefault(cat, []).append((tid, prompt))
-        for cat, members in groups.items():
+    def _one(cat, members):
+        """One category's batch. Errors are contained per-category."""
+        try:
             if elapsed() > config.FLUSH_S - 60:
                 return
             suffix = pipelines.FACTUAL_ESC if cat == "factual" else ""
@@ -140,6 +152,25 @@ def early_escalate(tasks_c):
                     got += 1
             flush()
             log(f"early batch[{cat}] answered {got}/{len(members)}")
+        except Exception as e:  # noqa: BLE001 — insurance must never hurt
+            log(f"early escalation error [{cat}] (non-fatal): {e}")
+
+    try:
+        groups = {}
+        for tid, cat, prompt in tasks_c:
+            if cat in EARLY_REMOTE_CATS:
+                groups.setdefault(cat, []).append((tid, prompt))
+        # Categories go CONCURRENTLY: these are network-bound calls, and a slow
+        # proxy would otherwise serialize them back into the same wall-clock
+        # squeeze this function exists to escape. They contend for nothing
+        # local (BUDGET is lock-protected; flush is atomic; RESULTS/CONF writes
+        # are per-task and guarded by the EARLY_CONF ordering rule).
+        threads = [threading.Thread(target=_one, args=(c, m), daemon=True)
+                   for c, m in groups.items()]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=max(5.0, config.FLUSH_S - 40 - elapsed()))
     except Exception as e:  # noqa: BLE001 — insurance must never hurt
         log(f"early escalation error (non-fatal): {e}")
 
