@@ -34,8 +34,11 @@ _PROTOS = None          # (labels[list[str]], matrix[n, dim] L2-normalised)
 _INIT_TRIED = False
 
 # Below this cosine similarity we do not trust the embedding verdict and defer to
-# the regex. Tuned so a genuine out-of-distribution prompt is not force-fitted.
-_MIN_SIM = 0.30
+# the regex. 0.30 clipped real hits ("Trim this down to the essentials" -> summary
+# scored exactly 0.30 and got dropped). Lowering to 0.22 is safe because route() is
+# only ever consulted on the regex's factual CATCH-ALL, and a genuine factual still
+# matches its own exemplars far higher (0.42-0.52) than any rival category.
+_MIN_SIM = 0.22
 
 # Exemplars per category — deliberately varied WORDING for the same INTENT, since
 # that is precisely what the router must generalise over.
