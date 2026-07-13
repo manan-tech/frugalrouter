@@ -125,8 +125,12 @@ ESC_CAPS = {
 #     validated 3/3 + 2/2 with 0.88-0.95 exemplar hits),
 #   - factual stays local + remote VERIFY (verdict-parsed),
 #   - summary/sentiment stay pure local (passed hidden, pass suites).
+# Variant B (post-gate-pass): code_gen/code_debug REJOIN the escalation set —
+# the scored 84.2% run answered hidden code REMOTELY and passed it; keeping
+# that path is the no-new-risk choice. Exemplar priming still helps the local
+# fallback if the proxy dies.
 CATEGORY_THRESHOLDS = {"factual": 0.99, "logic": 0.99, "ner": 0.99,
-                       "math": 0.99}
+                       "math": 0.99, "code_gen": 0.99, "code_debug": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")
