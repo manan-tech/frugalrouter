@@ -35,14 +35,22 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # (public10 spent 3,821 incl. ~1.7k repair overhead and STILL starved the
 # ner batch at a 4,000 cap — runs 29179177766/29179420875). Healthy
 # rehearsal-shaped spend stays ~2.1k, under the ~2,520 all-API floor.
-# ONE-SHOT BUILD: zero tokens, and NOT env-overridable — an injected env must not
-# be able to re-arm billing. All three budget knobs are hard zero.
-ESCALATION_BUDGET_TOKENS = 0
-# When local inference is dead or unusably slow, passing the accuracy gate
-# outranks token frugality: emergency budget covers escalating every task.
-# Hard zero. Five raise_budget() sites (main.py 187/324/345/385 + the soft-deadline path)
-# would otherwise promote to this on a slow probe and escalate all 19.
-EMERGENCY_BUDGET_TOKENS = 0
+# HYBRID ONE-SHOT BUILD. Pure-local measured 15/19 = 78.9% on real grader
+# hardware (a quantized 1.7B float-flips "Mars"->"Venus" and drops the
+# palindrome space-strip between boxes) — a gate FAIL. So a SMALL, targeted
+# escalation budget buys back exactly the two categories a 1.7B can't be
+# trusted on: factual (unverifiable, hallucination-prone) and code_gen when
+# the behavioral vote finds no consensus. Everything else stays local & free
+# (math executes, ner/sentiment/summary/logic/code_debug measured solid).
+# ~1-1.3k tokens expected — clears the gate with margin, ~5x under the 5,685
+# the sampling build spent for the same 78.9%. NOT env-overridable (injection
+# safety): the grader injects only the 3 config-contract vars.
+ESCALATION_BUDGET_TOKENS = 2600
+# Safety net for genuine mid-run local DEATH only (mass-fallback: >= half the
+# tasks conf<0.1, or a 3-task dead streak). A healthy box never trips this;
+# when it does, gate survival outranks token rank. Kept modest so a false
+# trigger can't runaway-bill.
+EMERGENCY_BUDGET_TOKENS = 8000
 # below this, local quality/speed can't clear the gate — panic/starved-lean
 # answers score ~30-60% (grader-measured), so slow counts as dead and we
 # escalate everything (measured 95% via batches)
@@ -97,9 +105,18 @@ ESC_CAPS = {
 # the judge (1/2). Both are cheap remotely (~220/120 tok) and remote gets them
 # right. We were sitting EXACTLY on the gate at 16/19 with zero margin, in an
 # environment that swings +-16 points. Margin is worth ~900 tokens.
-CATEGORY_THRESHOLDS = {"factual": 0.99, "code_debug": 0.99, "code_gen": 0.40,
-                       "logic": 0.99, "math": 0.65, "ner": 0.40,
-                       "sentiment": 0.99, "summary": 0.99}
+# HYBRID ONE-SHOT thresholds — MEASURED on the grader-spec c6i box, not the old
+# 0.6B calibration. The fine-tuned 1.7B is solid & FREE on math (executes
+# Python), ner, sentiment, logic, summary (all 2/2+ at grader speed) -> keep
+# their 0.55 default so a 0.95 local answer never escalates. It is unreliable on
+# exactly two categories, so those always go remote:
+#   factual  0.99 — unverifiable + hallucinates ("Venus is the Red Planet")
+#   code_gen 0.99 — 1/3 local; the behavioral vote can't save a CONFIDENT-but-
+#                   wrong answer (palindrome without space-strip: the model's
+#                   dominant behavior IS the bug, so 2/3 samples "agree" wrong)
+# code_debug stays local (0.55): d2's fix-miss is one accepted task; escalating
+# it buys 18->19 but costs ~650 tok — margin over the 16/19 gate doesn't need it.
+CATEGORY_THRESHOLDS = {"factual": 0.99, "code_gen": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")

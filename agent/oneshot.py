@@ -143,17 +143,21 @@ def _fingerprint(code: str):
     return f"{arity}:" + "||".join(parts) if parts else None
 
 
-def _majority_code(prompt: str, raw0: str) -> str:
-    """Two resamples + behavioral vote. Returns the raw answer to ship —
-    temp-0's unless it disagrees with a >=2 cluster it isn't part of."""
+def _majority_code(prompt: str, raw0: str):
+    """Two resamples + behavioral vote. Returns (answer_to_ship, confident):
+    ship temp-0's answer unless a >=2 cluster it isn't part of overrules it;
+    `confident` is True iff some behavior recurred across >=2 samples. When
+    every sample scatters to a different behavior (no consensus), the problem
+    was too hard for the 1.7B this run — confident=False routes it to
+    escalation instead of shipping a coin-flip."""
     code0 = extract_code(raw0)
     if not code0 or "def " not in code0:
-        return raw0
+        return raw0, False                # unparseable — let escalation decide
     if elapsed() > config.SOFT_NEW_WORK_S * 0.6:
-        return raw0                       # protect the deadline
+        return raw0, True                 # protect the deadline; trust temp-0
     fp0 = _fingerprint(code0)
     if fp0 is None:
-        return raw0                       # no usable battery — nothing to vote on
+        return raw0, True                 # no usable battery — can't vote, keep it
     votes = [(fp0, raw0)]
     for temp in (0.5, 0.9):
         try:
@@ -171,12 +175,16 @@ def _majority_code(prompt: str, raw0: str) -> str:
     for fp, _raw in votes:
         counts[fp] = counts.get(fp, 0) + 1
     top_fp = max(counts, key=lambda k: counts[k])
-    if counts[top_fp] >= 2 and fp0 != top_fp:
+    confident = counts[top_fp] >= 2
+    if confident and fp0 != top_fp:
         winner = next(r for f, r in votes if f == top_fp)
         log(f"oneshot[code_gen] majority overruled temp-0 "
             f"({counts[top_fp]}/{len(votes)} agree)")
-        return winner
-    return raw0
+        return winner, True
+    if not confident:
+        log(f"oneshot[code_gen] no behavioral consensus across {len(votes)} "
+            f"samples — routing to escalation")
+    return raw0, confident
 
 
 def answer(category: str, prompt: str):
@@ -205,7 +213,13 @@ def answer(category: str, prompt: str):
             return Result("Unable to determine.", 0.0)
 
     if category == "code_gen":
-        return Result(_majority_code(prompt, raw).strip(), 0.95)
+        shipped, confident = _majority_code(prompt, raw)
+        # confident (a >=2 behavioral cluster) -> trust it, zero tokens.
+        # no consensus -> conf below the 0.55 escalation threshold so
+        # escalate_candidates buys a remote answer; the local pick stands as
+        # the fallback if the budget/proxy can't.
+        return Result(shipped.strip(), 0.95 if confident else 0.45,
+                      esc_max_tokens=420)
 
     if category == "math":
         shipped, ok = _exec_math(raw)
@@ -221,5 +235,16 @@ def answer(category: str, prompt: str):
                 log(f"oneshot[math] retry failed: {e}")
             return Result(shipped, 0.30)
         return Result(shipped, 0.95)
+
+    if category == "factual":
+        # A 1.7B is confidently wrong on facts too often to trust locally, and
+        # nothing here can verify a fact (grader box: "Venus is the Red
+        # Planet"). Ship LOW conf with the remote format hint: main.early_escalate
+        # answers factual in a batch up front (primary path), and if that proxy
+        # call fails, this sub-threshold Result lets escalate_candidates retry it
+        # individually. The local answer stands only if both remote paths fail.
+        from .pipelines import FACTUAL_ESC
+        return Result(raw.strip(), 0.45, esc_suffix=FACTUAL_ESC,
+                      esc_max_tokens=160)
 
     return Result(raw.strip(), 0.95)

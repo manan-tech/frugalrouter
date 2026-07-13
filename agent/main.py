@@ -118,7 +118,14 @@ def _esc_threshold(cat, override):
 # subset — v13's extra groups never got their turn. Firing every always-remote
 # category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
 # instead of the last 70 seconds of it.
-EARLY_REMOTE_CATS = ("factual", "summary", "code_debug", "logic", "sentiment")
+# HYBRID ONE-SHOT: only factual fires early. The fine-tuned 1.7B answers
+# summary/logic/sentiment/code_debug well locally (measured 2/2 each on the
+# grader box) — escalating them would burn tokens for no accuracy. factual is
+# the one category that is BOTH unverifiable locally AND where a small model
+# hallucinates (grader box: "Venus is the Red Planet"), so it always goes
+# remote; code_gen escalates only reactively, when its behavioral vote finds
+# no consensus (oneshot returns conf < the 0.55 threshold there).
+EARLY_REMOTE_CATS = ("factual",)
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
