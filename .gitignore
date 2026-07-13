@@ -26,3 +26,7 @@ finetune/sft*.jsonl
 finetune/out/
 finetune/.build/
 llama.cpp/
+
+# RAG corpus bundle — 93MB embeddings+chunks, rebuilt by finetune/rag scripts;
+# far too big for git and (like the SFT set) not for the public repo
+finetune/rag/bundle/
