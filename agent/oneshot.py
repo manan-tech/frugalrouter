@@ -272,6 +272,13 @@ def answer(category: str, prompt: str):
                       esc_max_tokens=420)
 
     if category == "math":
+        # Local executed answer ships as the fallback; the hidden set failed
+        # 1 math (organizer breakdown) — the systematic-miscode class where a
+        # wrong program still runs. Remote solves it independently.
+        math_esc = (" Solve carefully step by step internally, then reply "
+                    "with ONLY the final answer value(s), each labeled, "
+                    "with units or currency symbols where the question "
+                    "implies them. No working shown.")
         shipped, ok = _exec_math(raw)
         if not ok:
             # a second sample usually writes a working program; keep the raw
@@ -280,11 +287,35 @@ def answer(category: str, prompt: str):
                 raw2 = _chat(prompt, cap, temperature=0.3)
                 shipped2, ok2 = _exec_math(raw2)
                 if ok2:
-                    return Result(shipped2, 0.95)
+                    return Result(shipped2, 0.95, esc_suffix=math_esc,
+                                  esc_max_tokens=240)
             except Exception as e:  # noqa: BLE001
                 log(f"oneshot[math] retry failed: {e}")
-            return Result(shipped, 0.30)
-        return Result(shipped, 0.95)
+            return Result(shipped, 0.30, esc_suffix=math_esc,
+                          esc_max_tokens=240)
+        return Result(shipped, 0.95, esc_suffix=math_esc, esc_max_tokens=240)
+
+    if category == "logic":
+        # 2 of the 4 hidden-set failures were logic — a 1.7B one-liner loses
+        # to rephrased multi-constraint puzzles. The frontier models get room
+        # to reason but must answer in our judged shape.
+        logic_esc = (" Work through the constraints carefully internally, "
+                     "then reply with ONLY the final answer: one short "
+                     "sentence, plus a brief parenthetical justification.")
+        return Result(raw.strip(), 0.95, esc_suffix=logic_esc,
+                      esc_max_tokens=220)
+
+    if category == "ner":
+        # 1 hidden-set failure was ner. The remote model re-extracts with the
+        # exact judged format spelled out; the local answer stands if the
+        # proxy dies.
+        ner_esc = (" Extract ALL named entities. Output one per line as: "
+                   "Entity | TYPE  (TYPE in PERSON, ORGANIZATION, LOCATION, "
+                   "DATE, EVENT, PRODUCT). Include every distinct entity; "
+                   "add nothing that is not a named entity. If none, "
+                   "output: None")
+        return Result(raw.strip(), 0.95, esc_suffix=ner_esc,
+                      esc_max_tokens=150)
 
     if category == "factual":
         # VERIFY-DON'T-GENERATE (user, T-2h): answer locally, then have the
