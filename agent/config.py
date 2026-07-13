@@ -79,9 +79,18 @@ ESC_CAPS = {
 # sentiment's 0.85 tier holds judgment misses (s4 positive-vs-neutral)
 # -> 0.90. Code and logic keep the 0.40 safety net — their verifiers are
 # deterministic (executed cross-impls / brute-forced constraints).
-CATEGORY_THRESHOLDS = {"factual": 0.55, "code_debug": 0.95, "code_gen": 0.40,
-                       "logic": 0.40, "math": 0.65, "ner": 0.40,
-                       "sentiment": 0.40, "summary": 0.90}
+# Local keeps ONLY what it proves or measures: math (executed Python + an
+# independent boxed answer agree), code_gen (two implementations RUN and agree),
+# ner (purpose-trained ONNX tagger). Those went 3/3, 3/3, 2/2 at grader speed.
+# LOGIC and SENTIMENT now escalate. Logic's brute-forcer needs wall-clock; on a
+# slow box it drops to panic, never runs, and ships a GUESS (measured 0/2). And
+# sentiment's ONNX label is right but the LLM's justification is too generic for
+# the judge (1/2). Both are cheap remotely (~220/120 tok) and remote gets them
+# right. We were sitting EXACTLY on the gate at 16/19 with zero margin, in an
+# environment that swings +-16 points. Margin is worth ~900 tokens.
+CATEGORY_THRESHOLDS = {"factual": 0.99, "code_debug": 0.99, "code_gen": 0.40,
+                       "logic": 0.99, "math": 0.65, "ner": 0.40,
+                       "sentiment": 0.40, "summary": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")

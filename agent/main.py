@@ -118,12 +118,15 @@ def _esc_threshold(cat, override):
 # subset — v13's extra groups never got their turn. Firing every always-remote
 # category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
 # instead of the last 70 seconds of it.
-EARLY_REMOTE_CATS = ("factual", "summary", "code_debug")
+EARLY_REMOTE_CATS = ("factual", "summary", "code_debug", "logic")
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
 # never re-escalates (double-bills) an early-answered task.
-EARLY_CONF = 0.96
+EARLY_CONF = 1.0   # MUST exceed every CATEGORY_THRESHOLD (0.99). At 0.96 the
+                   # early-answered tasks sat BELOW their threshold and the late
+                   # pass re-escalated every one of them — measured double-billing
+                   # of ~1,700 tokens (logic answered at 58s, bought AGAIN at 405s).
 
 
 def early_escalate(tasks_c):
@@ -343,9 +346,7 @@ def main() -> int:
             # sample, no thinking, no voting. That is precisely where our local
             # quality was being thrown away. Local really has ~12 tasks:
             # 12 x 26s = 312s, which fits, so it can afford FULL quality.
-            todo = sum(1 for t2, _c2, _p2 in tasks_c[i:]
-                       if CONF.get(t2, 0) < EARLY_CONF)
-            mode = pick_mode(tps, todo)
+            mode = pick_mode(tps, len(tasks_c) - done)
             res = pipelines.run_task(cat, prompt, mode)
             if res.confidence > CONF.get(tid, 0):
                 RESULTS[tid] = res.answer or _FALLBACK
