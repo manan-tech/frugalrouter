@@ -239,6 +239,17 @@ def _start_one(server) -> bool:
 
 
 def start_all() -> bool:
+    if getattr(config, "SINGLE_MODEL", False):
+        # one model serves every category: never start a second server —
+        # it would load the SAME gguf twice (2x 1.1 GB RSS + 2x KV/compute
+        # buffers) and hand the 4 GB cgroup to the OOM killer for nothing.
+        ok_g = _start_one(GENERAL)
+        if ok_g:
+            CODER.proc = None
+            CODER.port = GENERAL.port
+            CODER.proxied = True
+            log("SINGLE_MODEL: coder proxies to general on :%d" % GENERAL.port)
+        return ok_g
     # sequential startup halves the peak memory/CPU spike of model loading —
     # the grading env is tighter than it looks (no swap headroom)
     ok_g = _start_one(GENERAL)
@@ -278,10 +289,11 @@ def probe_tps() -> float:
         # snapshot the GENERAL call's server-side timings before the coder
         # call overwrites LAST_TIMINGS
         gen_timings = dict(LAST_TIMINGS)
-        CODER.chat(
-            [{"role": "user", "content":
-              "Write a python function that adds two numbers. Code only."}],
-            max_tokens=48, temperature=0.0, timeout_s=45)
+        if not getattr(CODER, "proxied", False):
+            CODER.chat(
+                [{"role": "user", "content":
+                  "Write a python function that adds two numbers. Code only."}],
+                max_tokens=48, temperature=0.0, timeout_s=45)
     except Exception as e:
         log(f"warmup workout failed: {e}")
         return 0.0

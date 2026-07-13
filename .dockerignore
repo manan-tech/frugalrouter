@@ -8,3 +8,16 @@ models
 README.md
 **/__pycache__
 .DS_Store
+
+# SFT data must never enter the build context. .gitignore alone is not enough —
+# docker sends the whole context to the daemon, and one careless `COPY . .`
+# would bake a competitive asset into a PUBLIC image.
+finetune/
+llama.cpp/
+*.jsonl
+.env
+eval/
+# ...but the fine-tuned WEIGHTS are the product and must be COPY-able. The
+# image is public anyway (the grader pulls it), so this exposes nothing the
+# GGUF inside the image doesn't already.
+!finetune/out/general.gguf

@@ -13,12 +13,13 @@ RUN mkdir -p /opt/llama && \
       --wildcards "llama-${LLAMA_TAG}/llama-server" "llama-${LLAMA_TAG}/*.so*" && \
     ls -la /opt/llama && test -f /opt/llama/llama-server
 
-ARG GENERAL_URL="https://huggingface.co/unsloth/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q4_K_M.gguf"
-ARG CODER_URL="https://huggingface.co/Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF/resolve/main/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
-RUN mkdir -p /models && \
-    curl -fL --retry 3 -o /models/general.gguf "$GENERAL_URL" && \
-    curl -fL --retry 3 -o /models/coder.gguf "$CODER_URL" && \
-    ls -la /models
+# Fine-tuned Qwen3-1.7B (LoRA-SFT on 2,708 category-exact examples, merged,
+# Q4_K_M). COPY, not curl: the weights are ours, live only in this repo's
+# finetune/out/ (gitignored — too big for git) and in the pushed image.
+# Rehearsal19 measured 18/19 (94.7%) at ZERO Fireworks tokens, one-shot.
+RUN mkdir -p /models
+COPY finetune/out/general.gguf /models/general.gguf
+RUN ls -la /models && test -s /models/general.gguf
 
 # Purpose-trained NER: OntoNotes-v5 BERT (int8 ONNX, ~104MiB). Chosen over the
 # CoNLL ports because it has a NATIVE DATE class (catches "last April",

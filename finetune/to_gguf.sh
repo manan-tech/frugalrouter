@@ -126,7 +126,11 @@ say "2/7  python deps for the converter"
 if "$PY" -c "import torch, transformers, numpy" >/dev/null 2>&1 && [ "${FORCE_REQS:-0}" != "1" ]; then
   echo "torch/transformers/numpy already present — NOT touching them"
   echo "(FORCE_REQS=1 to install llama.cpp's pinned CPU requirements anyway)"
-  "$PY" -c "import sentencepiece" >/dev/null 2>&1 || pip install -q sentencepiece protobuf || true
+  # MUST be "$PY" -m pip, into the SAME env the converter runs in — a bare `pip`
+  # hits the system python and the `|| true` hides it. Without sentencepiece the
+  # Qwen vocab path dies on ModuleNotFoundError (only FileNotFoundError falls
+  # back to BPE), so this is load-bearing, not an optional nicety.
+  "$PY" -c "import sentencepiece" >/dev/null 2>&1 || "$PY" -m pip install -q sentencepiece protobuf
 else
   pip install -q -r "$SRC/requirements/requirements-convert_hf_to_gguf.txt"
 fi
@@ -137,7 +141,11 @@ say "3/7  ARCH GATE: does THIS converter support $ARCH?"
 # ---------------------------------------------------------------------------
 # print_registered_models() writes with logger.error -> STDERR. Capture both.
 SUPPORTED="$("$PY" "$SRC/convert_hf_to_gguf.py" --print-supported-models 2>&1 || true)"
-if ! printf '%s\n' "$SUPPORTED" | grep -qE "^[[:space:]]*-[[:space:]]*${ARCH}$"; then
+# Match "  - Qwen3ForCausalLM" with NO leading anchor: today the lines are bare
+# (print_registered_models runs before basicConfig, so logging's lastResort
+# handler prints "%(message)s"), but a future tag could prefix them with
+# "ERROR:hf-to-gguf:". Anchoring at ^ would false-fail the gate if that changes.
+if ! printf '%s\n' "$SUPPORTED" | grep -qE -- "-[[:space:]]+${ARCH}$"; then
   echo "--- qwen-ish architectures this converter knows ---" >&2
   printf '%s\n' "$SUPPORTED" | grep -i qwen >&2 || true
   die "$ARCH is NOT registered in convert_hf_to_gguf.py @ $LLAMA_TAG.
@@ -168,14 +176,31 @@ if [ ! -x "$BIN/llama-quantize" ]; then
 fi
 export LD_LIBRARY_PATH="$BIN:${LD_LIBRARY_PATH:-}"
 
-if ! "$BIN/llama-quantize" --help >/dev/null 2>&1; then
+# Gate on BOTH tools we need: a prebuilt that can't exec (missing libgomp1/
+# libcurl4, glibc too old) must fall back BEFORE we depend on it.
+# llama-quantize has NO --help handler: quantize.cpp b9959 L394 `if (argc < 3) usage()`
+# -> L177 `exit(1)`. So `llama-quantize --help >/dev/null || die` DIES UNCONDITIONALLY,
+# even after a perfect build — the whole conversion was unreachable. Probe the OUTPUT
+# (usage() always prints the "usage:" banner on stdout), never the exit code.
+quantize_ok() {
+    local out
+    out="$("$1" --help 2>&1 || true)"
+    case "$out" in
+        *"model-quant.gguf"*|*"allow-requantize"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if ! quantize_ok "$BIN/llama-quantize" || [ ! -x "$BIN/llama-server" ]; then
   echo "prebuilt binaries unusable here — building from source (slower)"
   cmake -S "$SRC" -B "$SRC/build" -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "$SRC/build" --target llama-quantize llama-server llama-cli -j"$(nproc)" >/dev/null
+  cmake --build "$SRC/build" --target llama-quantize llama-server llama-cli \
+        -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)" >/dev/null
   BIN="$SRC/build/bin"
   export LD_LIBRARY_PATH="$BIN:${LD_LIBRARY_PATH:-}"
 fi
-"$BIN/llama-quantize" --help >/dev/null 2>&1 || die "no working llama-quantize"
+quantize_ok "$BIN/llama-quantize" || die "no working llama-quantize (built, but the binary does not respond)"
+[ -x "$BIN/llama-server" ] || die "no llama-server binary to verify with"
 echo "binaries: $BIN"
 
 # ---------------------------------------------------------------------------
@@ -240,7 +265,8 @@ print("chat template: embedded, Qwen3 ({} chars, enable_thinking={})".format(
 # 3. a real one-shot task, in the exact shape agent/llm.py sends
 #    (system prompt byte-identical to train.py's SYS).
 SYS = ("You answer the user's task directly and in the exact format requested. "
-       "No preamble, no explanation of your process. Answer once, correctly.")
+       "No preamble, no restating the question, no explanation of your process. "
+       "Answer once, correctly.")
 body = {
     "messages": [
         {"role": "system", "content": SYS},
@@ -294,18 +320,27 @@ cat <<EOF
 
   IT GOES TO:      /models/general.gguf   (agent/config.py GENERAL_MODEL_PATH)
 
-  1. copy it off the GPU box (it is gitignored via *.gguf — never commit it):
+  1. get it off the GPU box:
        scp <gpu-box>:$GGUF  finetune/out/general.gguf
 
-  2. Dockerfile: stop downloading the stock model, copy ours instead.
-     Drop general.gguf from the ARG GENERAL_URL / RUN curl block, and add to the
-     FINAL stage (after 'COPY --from=dl /models /models'):
+  2. bake it. NOTE: .github/workflows/eval.yml BUILDS the image from the git
+     checkout (context: .), and this file is gitignored + too big for git
+     (>100MB). So a bare 'COPY finetune/out/general.gguf' builds on your Mac but
+     BREAKS THE CI EVAL. Pick one:
 
-       COPY finetune/out/general.gguf /models/general.gguf
+     (a) RECOMMENDED — host it, keep the Dockerfile's existing curl pattern.
+         Upload to HF, then in the Dockerfile point GENERAL_URL at it:
+           huggingface-cli upload <you>/frugalrouter-qwen3-1.7b-sft \\
+               finetune/out/general.gguf general.gguf
+           ARG GENERAL_URL="https://huggingface.co/<you>/frugalrouter-qwen3-1.7b-sft/resolve/main/general.gguf"
+         Local builds and CI both keep working, unchanged.
 
-     (.dockerignore does not exclude finetune/, so it IS in the build context.)
+     (b) LOCAL-ONLY — 'COPY finetune/out/general.gguf /models/general.gguf' in
+         the final stage (.dockerignore does not exclude finetune/). If you do
+         this you MUST also add a step to eval.yml that fetches the GGUF to that
+         path before the build, or CI dies.
 
-  3. rebuild + validate:
+  3. rebuild + validate (budget=0 proves the zero-token claim):
        docker buildx build --platform linux/amd64 -t ghcr.io/manan-tech/frugalrouter:vN --load .
        gh workflow run eval -R manan-tech/frugalrouter -f tasks=eval/rehearsal19.json -f budget=0
 

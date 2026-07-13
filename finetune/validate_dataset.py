@@ -221,13 +221,20 @@ def is_trivial_code(code):
     return False
 
 
+# Prose glued onto the end of an inline snippet. The trap: "return nums[1]. Fix"
+# PARSES — `.Fix` is an attribute access — so "does it compile?" is NOT enough to
+# tell code from code+prose. Real Python never writes a dot followed by a space
+# and a name; prose after a sentence-ending dot always does.
+_DOT_PROSE_RE = re.compile(r"\.\s+[A-Za-z_]")
+
+
 def code_from_prompt(text):
     """Lift the buggy snippet out of a code_debug prompt.
 
     Prompts come both fenced and inline ("...has a bug: def get_sum(nums):
     return nums[0] + nums[1]. Find and fix it."), so: prefer a fence; otherwise
-    take the longest suffix-trimmed slice starting at a def/class/import that
-    actually parses.
+    cut the trailing instruction off and keep the longest slice that is *clean*
+    code — parses AND carries no prose.
     """
     fs = fences(text)
     if fs:
@@ -238,17 +245,24 @@ def code_from_prompt(text):
         if not m:
             return ""
     body = text[m.start():]
-    if parses(body):
-        return body.strip()
-    # trim trailing prose one token at a time until it compiles
+
+    cands = []
+    # 1. drop trailing sentences ("Find and fix it."), longest slice first
+    chunks = re.split(r"(?<=[.!?])\s+(?=[A-Z])", body)
+    for k in range(len(chunks), 0, -1):
+        cands.append(" ".join(chunks[:k]))
+    # 2. fall back to shaving one token at a time
     toks = body.split(" ")
-    for cut in range(1, min(len(toks), 80)):
-        cand = " ".join(toks[:-cut]).rstrip().rstrip(".").rstrip()
-        if len(cand) < 12:
-            break
-        if parses(cand):
-            return cand.strip()
-    return body.strip()
+    for cut in range(0, min(len(toks), 80)):
+        cands.append(" ".join(toks[:len(toks) - cut]) if cut else body)
+
+    for cand in cands:
+        for c in (cand.strip(), cand.strip().rstrip(".").rstrip()):
+            if len(c) < 12 or _DOT_PROSE_RE.search(c):
+                continue
+            if parses(c):
+                return c.strip()
+    return ""      # no clean extraction: the caller falls back to a text compare
 
 
 # --------------------------------------------------------------------------
@@ -294,6 +308,10 @@ def safe_arith(expr):
 def _arith_normalise(text):
     t = (text.replace("×", "*").replace("·", "*").replace("÷", "/")
              .replace("−", "-").replace("–", "-").replace("—", "-"))
+    # "1.875 x 2.40" — models write multiplication as an ASCII x constantly, and
+    # without this the equation is skipped rather than checked. Digit-on-both-
+    # sides only, so the variable in "2x = 10" is untouched.
+    t = re.sub(r"(?<=\d)\s*[xX]\s*(?=[\d(])", "*", t)
     t = re.sub(r"(\d),(\d{3})\b", r"\1\2", t)               # 1,672 -> 1672
     t = re.sub(r"(\d),(\d{3})\b", r"\1\2", t)               # 1,234,567
     t = t.replace("$", "").replace("€", "").replace("£", "")
@@ -307,6 +325,13 @@ def _arith_normalise(text):
 _EQ_RE = re.compile(
     r"(?<![\w.])((?:\(?-?\d[\d.]*\)?)(?:\s*[-+*/%]\s*\(?-?\d[\d.]*\)?)+)"
     r"\s*=\s*(-?\d[\d.]*)(?![\w.])")
+
+# Tolerance for a stated equation. Loose enough for the rounding the rubrics
+# themselves bless ("1.87 or 1.88 cups" for 1.875; $4.488 shown as $4.50), tight
+# enough to catch a real miscalculation. 2% was NOT: it silently accepted
+# "37% of 2400 = 900" (off by 12, i.e. 1.3%). Do not loosen without a case.
+ARITH_ABS_TOL = 0.05
+ARITH_REL_TOL = 0.005
 
 
 def bad_equations(answer):
@@ -322,8 +347,7 @@ def bad_equations(answer):
             want = float(rhs)
         except ValueError:
             continue
-        # tolerant: the rubrics themselves accept rounded intermediates
-        if abs(got - want) > max(0.05, 0.02 * abs(want)):
+        if abs(got - want) > max(ARITH_ABS_TOL, ARITH_REL_TOL * abs(want)):
             bad.append(f"{lhs.strip()} = {rhs} (actually {got:g})")
     return bad
 
@@ -437,7 +461,8 @@ def clean_ner(ans):
                  "LOC": "LOCATION", "GPE": "LOCATION", "PLACE": "LOCATION",
                  "TIME": "DATE", "PROD": "PRODUCT"}
         typ = alias.get(typ, typ)
-        out.append(f"{ent.strip().strip('*`\"')} | {typ}")
+        ent = ent.strip().strip('*`"')          # 3.9-safe: no backslash inside the f-string expr
+        out.append(f"{ent} | {typ}")
     # de-dupe lines, keep order
     return "\n".join(OrderedDict.fromkeys(out))
 

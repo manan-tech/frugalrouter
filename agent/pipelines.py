@@ -1055,6 +1055,13 @@ HANDLERS = {
 
 
 def run_task(category: str, prompt: str, mode: str) -> Result:
+    if config.ONE_SHOT:
+        # Fine-tuned build: the model was trained on its OWN prompt shape
+        # (oneshot.SYSTEM_PROMPT + raw task, thinking off). The legacy
+        # handlers below would prompt it off-distribution, so they survive
+        # only as the crash fallback. oneshot.answer never raises.
+        from . import oneshot
+        return oneshot.answer(category, prompt)
     handler = HANDLERS.get(category, factual)
     try:
         res = handler(prompt, mode)

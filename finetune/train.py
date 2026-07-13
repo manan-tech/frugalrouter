@@ -12,7 +12,12 @@ WHY THIS EXISTS
     No sampling, no verification, no escalation.
 
 VERSIONS TARGETED
-    torch >= 2.3, transformers >= 4.44 (incl. v5.x), peft >= 0.11, datasets any.
+    torch >= 2.3, transformers >= 4.44 (incl. v5.x), peft >= 0.11, accelerate.
+    No trl, no datasets, no bitsandbytes — nothing here needs them.
+    Exercised end-to-end on transformers 4.57.2 / torch 2.11 (real Qwen3 arch,
+    real Qwen3-1.7B tokenizer): template, loss mask, LoRA, merge, save, smoke test.
+    Worth knowing: on 4.57 Trainer's `tokenizer=` kwarg is GONE (processing_class
+    only), so the tutorial spelling TypeErrors — we probe the signature instead.
     NOTE: this deliberately does NOT use trl.SFTTrainer. trl renamed/moved the
     exact things we depend on across versions — TrainingArguments -> SFTConfig,
     max_seq_length moved into SFTConfig then deprecated, tokenizer= ->
@@ -25,29 +30,38 @@ VERSIONS TARGETED
     (If you must use trl: SFTConfig(..., max_length=N, packing=False) +
      SFTTrainer(model=, args=, train_dataset=, peft_config=, processing_class=).)
 
-THE TRAP THIS FILE AVOIDS (read before you touch the template code)
-    Qwen3 has a thinking mode. Its chat template only emits the empty think
-    block in the *generation prompt* branch:
+THINKING MUST BE OFF, AND THE TOKENS MUST MATCH (verified, not assumed)
+    At inference agent/llm.py calls llama-server /v1/chat/completions with
+    --jinja and chat_template_kwargs={"enable_thinking": false}. That takes the
+    template's generation-prompt branch:
 
         {%- if add_generation_prompt %}
             {{- '<|im_start|>assistant\\n' }}
             {%- if enable_thinking is defined and enable_thinking is false %}
                 {{- '<think>\\n\\n</think>\\n\\n' }}
 
-    At inference agent/llm.py calls llama-server /v1/chat/completions with
-    --jinja and chat_template_kwargs={"enable_thinking": false}, so the model is
-    ALWAYS fed  `<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n`  and must
-    continue from there. But apply_chat_template() over a conversation that
-    already contains the assistant turn does NOT add that block — enable_thinking
-    is simply ignored on that path. Train that way and every single example is
-    skewed from what llama.cpp serves.
+    so the model is ALWAYS fed  `<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n`
+    and must continue straight into the answer. Training text has to reproduce
+    that prefix exactly or every example is skewed from what we serve.
 
-    So: render the PROMPT with add_generation_prompt=True + enable_thinking=False,
-    then concatenate the answer + <|im_end|> ourselves. We assert the empty think
-    block is present and inject it if the installed template differs.
+    We therefore render the PROMPT with add_generation_prompt=True +
+    enable_thinking=False and concatenate the answer + <|im_end|> ourselves. This
+    is exact by construction, and it hands us the prompt/completion boundary the
+    loss mask needs anyway.
+
+    Checked against the real Qwen/Qwen3-1.7B template (transformers 4.57): our
+    construction is BYTE-IDENTICAL to apply_chat_template() over the full
+    conversation. Note *why*, because it is a trap for whoever edits this next:
+    the full-conversation render only agrees by coincidence. Its assistant branch
+    emits '\\n<think>\\n' + reasoning_content.strip() + '\\n</think>\\n\\n', which
+    collapses to the same empty block when reasoning_content is '' — it is the
+    reasoning-content wrapper doing that, NOT enable_thinking (which the template
+    consults only under add_generation_prompt). That coincidence is revision- and
+    fork-dependent; the generation-prompt path is the one llama.cpp actually
+    walks, so we build from it and assert on it at startup.
 
 Usage (GPU box):
-    pip install -U torch transformers peft accelerate datasets
+    pip install -U torch transformers peft accelerate
     python finetune/train.py --dry-run --data finetune/sft.jsonl   # CPU, no model load
     python finetune/train.py --data finetune/sft.jsonl
 """
@@ -222,6 +236,63 @@ def _supported(fn, **kw):
     return {k: v for k, v in kw.items() if k in ok}
 
 
+# --------------------------------------------- upstream bug: transformers 4.57.2
+# tokenization_utils_base.py:293 does `_config.model_type` on a plain DICT inside
+# a Mistral-regex fixup path. It raises AttributeError for ANY tokenizer load that
+# is simultaneously:
+#     vocab_size > 100_000   (Qwen3 = 151_936  -> yes)
+#     a fast tokenizer       (yes)
+#     from a LOCAL directory (_is_local)
+#     whose config.json has transformers_version <= 4.57.2
+# Loading the concrete class instead of AutoTokenizer does NOT help — the bug is
+# in the shared base class. The only clean defusal is the config.json key itself:
+# `_config.get("transformers_version")` returning None short-circuits the branch.
+#
+# This matters far beyond our own load: llama.cpp's convert_hf_to_gguf.py calls
+# AutoTokenizer.from_pretrained(<merged dir>) — a local dir with a config.json we
+# just wrote — so an un-defused merged dir kills to_gguf.sh AFTER training, which
+# is the most expensive possible place to discover it. We strip the key from the
+# dir we create. It is optional provenance metadata; nothing (transformers,
+# convert_hf_to_gguf, llama.cpp) reads it. DO NOT "restore" it.
+
+def defuse_local_tokenizer_bug(d):
+    p = os.path.join(d, "config.json")
+    try:
+        with open(p, encoding="utf-8") as fh:
+            cfg = json.load(fh)
+        if cfg.pop("transformers_version", None) is None:
+            return
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(cfg, fh, indent=2)
+        print("   dropped config.json:transformers_version "
+              "(defuses the transformers 4.57.2 local-tokenizer AttributeError)")
+    except Exception as e:  # never let a cosmetic fixup kill a finished run
+        print(f"   ! could not defuse config.json ({e}) — if to_gguf.sh dies with "
+              f"\"'dict' object has no attribute 'model_type'\", delete the "
+              f"transformers_version key from {p}")
+
+
+def load_tokenizer(base):
+    from transformers import AutoTokenizer
+    try:
+        return AutoTokenizer.from_pretrained(base, trust_remote_code=True)
+    except AttributeError as e:
+        if "model_type" not in str(e):
+            raise
+        sys.exit(
+            f"\nFATAL: hit the transformers 4.57.2 local-tokenizer bug loading "
+            f"{base!r}\n  ('dict' object has no attribute 'model_type' — "
+            f"tokenization_utils_base.py:293)\n"
+            f"  It fires on a LOCAL model dir whose config.json declares "
+            f"transformers_version <= 4.57.2.\n"
+            f"  Fix in 5 seconds — drop that optional key:\n"
+            f"    python3 -c \"import json;p='{base}/config.json';"
+            f"c=json.load(open(p));c.pop('transformers_version',None);"
+            f"json.dump(c,open(p,'w'),indent=2)\"\n"
+            f"  ...or just pass the hub id (--base Qwen/Qwen3-1.7B), which is not "
+            f"affected.\n")
+
+
 # ------------------------------------------------------------------------ main
 
 def main():
@@ -238,6 +309,8 @@ def main():
     ap.add_argument("--maxlen", type=int, default=2048)  # == GENERAL_CTX
     ap.add_argument("--val-frac", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--resume", action="store_true",
+                    help="resume from the last checkpoint in --out (spot recovery)")
     ap.add_argument("--system", default=SYSTEM_PROMPT,
                     help="system prompt for rows that don't carry their own")
     ap.add_argument("--no-grad-ckpt", action="store_true",
@@ -250,7 +323,6 @@ def main():
     SYSTEM_PROMPT = a.system
 
     random.seed(a.seed)
-    from transformers import AutoTokenizer
 
     print(f"== loading {a.data}")
     rows = load_rows(a.data)
@@ -265,7 +337,7 @@ def main():
     if missing:
         print(f"  ! WARNING: no training rows for: {', '.join(missing)}")
 
-    tok = AutoTokenizer.from_pretrained(a.base, trust_remote_code=True)
+    tok = load_tokenizer(a.base)
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
     tok.padding_side = "right"
@@ -351,6 +423,65 @@ def main():
     if grad_ckpt:
         model.enable_input_require_grads()  # LoRA + ckpt: inputs need grads
 
+
+    # ------------------------------------------------------------ health log
+    # SPOT INSTANCE: the box can vanish mid-run. Everything needed to judge the
+    # run's health streams to train_health.jsonl (one JSON object per log step)
+    # so `tail -f` / scp gives loss curve, lr, grad-norm, GPU memory, throughput
+    # — and a resumable checkpoint always exists (save_steps below).
+    from transformers import TrainerCallback
+
+    class HealthCallback(TrainerCallback):
+        def __init__(self, path, total_steps):
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            self.path = path
+            self.t0 = time.time()
+            self.last_t = self.t0
+            self.last_step = 0
+            self.total = total_steps
+            open(self.path, "w").close()
+
+        def on_log(self, args, state, control, logs=None, **kw):
+            if not logs:
+                return
+            now = time.time()
+            steps = state.global_step - self.last_step
+            step_s = (now - self.last_t) / steps if steps > 0 else 0.0
+            gpu_gb = 0.0
+            try:
+                import torch as _t
+                if _t.cuda.is_available():
+                    gpu_gb = _t.cuda.max_memory_allocated() / 1e9
+            except Exception:
+                pass
+            rec = {
+                "t": round(now - self.t0, 1),
+                "step": state.global_step,
+                "of": self.total,
+                "epoch": round(state.epoch or 0, 3),
+                "loss": logs.get("loss"),
+                "eval_loss": logs.get("eval_loss"),
+                "lr": logs.get("learning_rate"),
+                "grad_norm": logs.get("grad_norm"),
+                "sec_per_step": round(step_s, 2),
+                "gpu_mem_gb": round(gpu_gb, 2),
+                "eta_min": round((self.total - state.global_step) * step_s / 60, 1)
+                           if step_s and self.total else None,
+            }
+            with open(self.path, "a") as fh:
+                fh.write(json.dumps(rec) + "\n")
+            bits = [f"step {rec['step']}/{rec['of']}", f"ep {rec['epoch']}"]
+            if rec["loss"] is not None:      bits.append(f"loss {rec['loss']:.4f}")
+            if rec["eval_loss"] is not None: bits.append(f"EVAL {rec['eval_loss']:.4f}")
+            if rec["grad_norm"] is not None: bits.append(f"gnorm {rec['grad_norm']:.2f}")
+            bits.append(f"{rec['gpu_mem_gb']}GB")
+            if rec["eta_min"] is not None:   bits.append(f"eta {rec['eta_min']}m")
+            print("  [health] " + "  ".join(bits), flush=True)
+
+    steps_per_epoch = max(1, len(train) // (a.bsz * a.accum))
+    total_steps = int(steps_per_epoch * a.epochs)
+    health = HealthCallback(os.path.join(a.out, "train_health.jsonl"), total_steps)
+
     targs = TrainingArguments(**_supported(
         TrainingArguments.__init__,
         output_dir=a.out,
@@ -361,14 +492,25 @@ def main():
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
         logging_steps=5,
-        save_strategy="epoch",
+        # SPOT-SAFE: checkpoint every 25 steps, not per-epoch — an interruption
+        # costs at most ~25 steps. Resume with --resume (passes the last
+        # checkpoint dir to trainer.train()).
+        save_strategy="steps",
+        save_steps=25,
         save_total_limit=2,
+        eval_strategy="epoch",
+        evaluation_strategy="epoch",
         bf16=True,
         gradient_checkpointing=grad_ckpt,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         max_grad_norm=1.0,
         remove_unused_columns=False,
-        dataloader_num_workers=2,
+        # 0, deliberately. The dataset is a small in-memory list of ALREADY
+        # tokenized dicts, so a worker process would parallelize nothing but the
+        # collator's list padding — zero throughput to gain, while forking a
+        # process that re-imports __main__ and re-forks the tokenizer is a real
+        # crash mode. Keep it single-process.
+        dataloader_num_workers=0,
         report_to="none",
         seed=a.seed,
     ))
@@ -384,10 +526,17 @@ def main():
         train_dataset=train,
         eval_dataset=val or None,
         data_collator=Collator(tok.pad_token_id),
+        callbacks=[health],
         **tkw)
 
     t0 = time.time()
-    trainer.train()
+    ckpt = None
+    if a.resume:
+        cks = sorted((d for d in os.listdir(a.out) if d.startswith("checkpoint-")),
+                     key=lambda d: int(d.split("-")[1])) if os.path.isdir(a.out) else []
+        ckpt = os.path.join(a.out, cks[-1]) if cks else None
+        print(f"== resume from: {ckpt or 'no checkpoint found — fresh run'}")
+    trainer.train(resume_from_checkpoint=ckpt)
     print(f"== trained in {(time.time() - t0) / 60:.1f} min")
 
     if val:
@@ -408,6 +557,7 @@ def main():
     mdir = os.path.abspath(os.path.join(a.out, "merged"))
     merged.save_pretrained(mdir, safe_serialization=True)
     tok.save_pretrained(mdir)  # carries the chat template into the GGUF
+    defuse_local_tokenizer_bug(mdir)  # or convert_hf_to_gguf.py dies on this dir
     with open(os.path.join(mdir, "frugal_sft_meta.json"), "w") as fh:
         json.dump({"base": a.base, "system_prompt": SYSTEM_PROMPT,
                    "enable_thinking": False, "epochs": a.epochs, "lr": a.lr,

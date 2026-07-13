@@ -10,7 +10,9 @@ OUTPUT_PATH = os.environ.get("OUTPUT_PATH", "/output/results.json")
 
 # ---- local model servers ----
 GENERAL_MODEL_PATH = "/models/general.gguf"   # Qwen3-1.7B Q4_K_M
-CODER_MODEL_PATH = "/models/coder.gguf"       # Qwen2.5-Coder-1.5B-Instruct Q4_K_M
+CODER_MODEL_PATH = "/models/general.gguf"     # F8: never delete this symbol —
+                                             # llm.py builds CODER at module scope.
+                                             # Point it at the single model instead.
 GENERAL_PORT = 8091
 CODER_PORT = 8092
 GENERAL_CTX = 2048   # long summarisation/NER passages must fit
@@ -33,10 +35,14 @@ HARD_EXIT_S = int(os.environ.get("HARD_EXIT_S", "535"))
 # (public10 spent 3,821 incl. ~1.7k repair overhead and STILL starved the
 # ner batch at a 4,000 cap — runs 29179177766/29179420875). Healthy
 # rehearsal-shaped spend stays ~2.1k, under the ~2,520 all-API floor.
-ESCALATION_BUDGET_TOKENS = int(os.environ.get("ESCALATION_BUDGET_TOKENS", "6000"))
+# ONE-SHOT BUILD: zero tokens, and NOT env-overridable — an injected env must not
+# be able to re-arm billing. All three budget knobs are hard zero.
+ESCALATION_BUDGET_TOKENS = 0
 # When local inference is dead or unusably slow, passing the accuracy gate
 # outranks token frugality: emergency budget covers escalating every task.
-EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000"))
+# Hard zero. Five raise_budget() sites (main.py 187/324/345/385 + the soft-deadline path)
+# would otherwise promote to this on a slow probe and escalate all 19.
+EMERGENCY_BUDGET_TOKENS = 0
 # below this, local quality/speed can't clear the gate — panic/starved-lean
 # answers score ~30-60% (grader-measured), so slow counts as dead and we
 # escalate everything (measured 95% via batches)
@@ -47,7 +53,10 @@ EMERGENCY_BUDGET_TOKENS = int(os.environ.get("EMERGENCY_BUDGET_TOKENS", "12000")
 # genuinely healthy box (>=7 tok/s; the 0.6B decodes ~2.5x the 1.7B, so even
 # their contended box should read ~15-25 — 7-9 means lean mode, still ~250s
 # for 19 tasks, with the threshold/soft-deadline nets covering quality).
-TPS_DEAD = 7.0
+# 0.0 — never declare local dead. The 1.7B runs at 6-8.5 tok/s on their box; TPS_DEAD=7.0
+# would coin-flip the whole submission into emergency escalate-all on a 6.4 probe.
+# There is nothing to escalate TO anyway.
+TPS_DEAD = 0.0
 ESCALATE_CONF_THRESHOLD = 0.55   # tasks below this confidence are candidates
 ESCALATION_TIMEOUT_S = 45  # their proxy under deadline load can be slow
 ESCALATION_WORKERS = 4
@@ -155,3 +164,12 @@ ENCODE_TPS_TELEMETRY = os.environ.get("ENCODE_TPS_TELEMETRY", "0") == "1"
 # Join judge results as "judge_pass" to build the records eval/calibrate.py
 # consumes. Empty (default) disables all signal capture and logging.
 CALIBRATION_LOG_PATH = os.environ.get("CALIBRATION_LOG_PATH", "")
+
+# one general model serves every category (coder proxies to it)
+SINGLE_MODEL = True
+
+# Fine-tuned one-shot build: every task is a single generation on the SFT
+# model's own training distribution (agent/oneshot.py); the legacy pipelines
+# survive only as run_task's crash fallback. Deliberately NOT env-overridable
+# — same reasoning as the zero budgets above.
+ONE_SHOT = True

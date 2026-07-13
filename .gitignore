@@ -7,9 +7,22 @@ __pycache__/
 eval/results/
 graphify-out/
 
+# fine-tuning artifacts: merged weights (~7GB), llama.cpp clone + binaries.
+# The GGUF itself is already covered by *.gguf above.
+finetune/out/
+finetune/.build/
+
 # strategy docs — unignore and commit AFTER the competition closes
 FINDINGS.md
 EDITS.md
 FAILURES.md
 FUTURE.md
 HANDOFF.md
+
+# SFT training data — the repo is PUBLIC and this is a competitive asset.
+# (Also: `git add -A` has already swept unreviewed files into a commit once
+# tonight, so this must be ignored, not merely "not staged".)
+finetune/sft*.jsonl
+finetune/out/
+finetune/.build/
+llama.cpp/
