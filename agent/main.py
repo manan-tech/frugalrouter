@@ -323,9 +323,11 @@ def main() -> int:
             f"— emergency escalation of all tasks")
         fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
 
+    early_thread = None
     if local_usable and config.ESCALATION_BUDGET_TOKENS > 0:
-        threading.Thread(target=early_escalate, args=(tasks_c,),
-                         daemon=True).start()
+        early_thread = threading.Thread(target=early_escalate, args=(tasks_c,),
+                                        daemon=True)
+        early_thread.start()
 
     tasks_meta = []
     if local_usable:
@@ -392,6 +394,19 @@ def main() -> int:
             tasks_meta.append((tid, cat, prompt,
                                pipelines.Result(_FALLBACK, 0.0,
                                                 esc_max_tokens=300)))
+
+    # WAIT for the early thread before deciding what still needs escalating.
+    # Without this, a slow proxy leaves its batches in flight, escalate_candidates
+    # sees CONF=0 for those tasks, and BUYS THEM A SECOND TIME. The join is bounded
+    # so a hung proxy can never eat the flush window.
+    if early_thread is not None and early_thread.is_alive():
+        budget_s = max(5.0, config.FLUSH_S - 30 - elapsed())
+        log(f"waiting up to {budget_s:.0f}s for early escalation to land "
+            f"(prevents re-buying tasks it is still fetching)")
+        early_thread.join(timeout=budget_s)
+        if early_thread.is_alive():
+            log("early escalation still in flight — proceeding (its answers, if "
+                "they land, only overwrite at EARLY_CONF and never re-bill)")
 
     escalate_candidates(tasks_meta)
 

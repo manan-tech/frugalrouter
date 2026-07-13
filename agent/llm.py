@@ -273,7 +273,7 @@ def probe_tps() -> float:
         GENERAL.chat(
             [{"role": "system", "content": "Summarize the text in one sentence."},
              {"role": "user", "content": _WARMUP_FILLER}],
-            max_tokens=64, temperature=0.0, timeout_s=120)
+            max_tokens=64, temperature=0.0, timeout_s=60)
         dt = time.monotonic() - t0
         # snapshot the GENERAL call's server-side timings before the coder
         # call overwrites LAST_TIMINGS
@@ -281,7 +281,7 @@ def probe_tps() -> float:
         CODER.chat(
             [{"role": "user", "content":
               "Write a python function that adds two numbers. Code only."}],
-            max_tokens=48, temperature=0.0, timeout_s=90)
+            max_tokens=48, temperature=0.0, timeout_s=45)
     except Exception as e:
         log(f"warmup workout failed: {e}")
         return 0.0
