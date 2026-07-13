@@ -233,6 +233,9 @@ def retrieve(query: str, k: int = 3, pool: int = 20, lam: float = 0.6):
             out.append({
                 "title": ch.get("title", ""),
                 "text": ch.get("text", ""),
+                # code-exemplar bundles carry the implementation alongside the
+                # embedded description; absent (e.g. a text corpus) it's "".
+                "code": ch.get("code", ""),
                 "score": float(sim_q[j]),      # raw query-cosine, NOT the mmr score
             })
         return out

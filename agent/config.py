@@ -116,11 +116,12 @@ ESC_CAPS = {
 #                   dominant behavior IS the bug, so 2/3 samples "agree" wrong)
 # code_debug stays local (0.55): d2's fix-miss is one accepted task; escalating
 # it buys 18->19 but costs ~650 tok — margin over the 16/19 gate doesn't need it.
-# code_debug joined after the grader run: three different builds all scored
-# the identical 15/19 on the hidden set, and code_debug is the one category
-# with a KNOWN systematic local miss (d2-class: all 5 resamples share the
-# wrong behavior). Remote code models fix those reliably for ~650 tok.
-CATEGORY_THRESHOLDS = {"factual": 0.99, "code_gen": 0.99, "code_debug": 0.99}
+# ENDGAME decision (user, T-2h): factual is the ONLY always-remote category.
+# code_gen/code_debug answer LOCALLY via exemplar retrieval (/models/rag holds
+# ~200 execution-verified reference implementations; the model adapts the
+# closest match instead of writing from scratch) + behavioral vote. They
+# escalate only if the model emits no usable code (oneshot ships conf 0.45).
+CATEGORY_THRESHOLDS = {"factual": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")

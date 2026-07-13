@@ -21,3 +21,6 @@ eval/
 # image is public anyway (the grader pulls it), so this exposes nothing the
 # GGUF inside the image doesn't already.
 !finetune/out/general.gguf
+# ...and the code-exemplar retrieval bundle ships in the image too.
+!finetune/rag/codebundle
+!finetune/rag/codebundle/**

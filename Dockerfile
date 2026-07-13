@@ -21,6 +21,14 @@ RUN mkdir -p /models
 COPY finetune/out/general.gguf /models/general.gguf
 RUN ls -la /models && test -s /models/general.gguf
 
+# Code-exemplar retrieval bundle (agent/rag.py): ~200 execution-verified
+# reference implementations embedded by task description with the SAME MiniLM
+# the router uses. oneshot's code categories retrieve the closest exemplar and
+# ADAPT it locally — from-scratch generation is where the measured misses came
+# from. Tiny: chunks + int8 embeddings are well under 1 MB.
+COPY finetune/rag/codebundle /models/rag
+RUN ls -la /models/rag && test -s /models/rag/emb_int8.npy
+
 # Purpose-trained NER: OntoNotes-v5 BERT (int8 ONNX, ~104MiB). Chosen over the
 # CoNLL ports because it has a NATIVE DATE class (catches "last April",
 # "three years ago", "Yesterday" — which no regex enumerates) plus EVENT and

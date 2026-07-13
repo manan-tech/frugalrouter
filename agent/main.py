@@ -118,14 +118,12 @@ def _esc_threshold(cat, override):
 # subset — v13's extra groups never got their turn. Firing every always-remote
 # category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
 # instead of the last 70 seconds of it.
-# HYBRID ONE-SHOT: only factual fires early. The fine-tuned 1.7B answers
-# summary/logic/sentiment/code_debug well locally (measured 2/2 each on the
-# grader box) — escalating them would burn tokens for no accuracy. factual is
-# the one category that is BOTH unverifiable locally AND where a small model
-# hallucinates (grader box: "Venus is the Red Planet"), so it always goes
-# remote; code_gen escalates only reactively, when its behavioral vote finds
-# no consensus (oneshot returns conf < the 0.55 threshold there).
-EARLY_REMOTE_CATS = ("factual",)
+# VERIFY-DON'T-GENERATE endgame: NOTHING fires early anymore. factual now
+# answers locally first and sends its OWN answer to the remote model for a
+# verify-or-correct verdict (oneshot builds the per-task suffix), so the
+# remote call can only happen AFTER the local pass — the late escalation
+# batch. Wall-clock is a non-issue in the one-shot build (~180s of 445s used).
+EARLY_REMOTE_CATS = ()
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
@@ -181,6 +179,26 @@ def early_escalate(tasks_c):
         log(f"early escalation error (non-fatal): {e}")
 
 
+def _apply_remote(tid, cat, ans):
+    """Fold a remote reply into RESULTS, verdict-aware for factual.
+
+    factual escalations are VERIFY calls (the prompt carries the local answer):
+    a reply of the single word CORRECT ratifies the local answer instead of
+    replacing it. Everything else — factual corrections included — is a real
+    answer and overwrites. Only factual gets verdict parsing; other categories'
+    remote replies could legitimately BEGIN with the word 'Correct'.
+    """
+    ans = ans.strip()
+    if cat == "factual":
+        verdict = ans.upper().strip().strip(".!,")
+        if verdict == "CORRECT" or verdict.startswith("CORRECT\n"):
+            CONF[tid] = 0.88  # remote-ratified local answer
+            log(f"{tid} (factual) local answer verified CORRECT remotely")
+            return
+    RESULTS[tid] = ans
+    CONF[tid] = 0.88
+
+
 def escalate_candidates(tasks_meta, threshold=None):
     # mass-fallback promotion: if most answers are dead (conf<0.1), local
     # inference failed in some way we didn't catch — the normal budget can
@@ -232,8 +250,7 @@ def escalate_candidates(tasks_meta, threshold=None):
             for tid, _c, _p, _r in members:
                 ans = answers.get(tid)
                 if ans and ans.strip():
-                    RESULTS[tid] = ans.strip()
-                    CONF[tid] = 0.88
+                    _apply_remote(tid, cat, ans)
             flush()
         else:
             for tid, _c, prompt, res in members:
@@ -242,8 +259,7 @@ def escalate_candidates(tasks_meta, threshold=None):
                 ans, _spent = fireworks.chat(prompt + res.esc_suffix, cat,
                                              max_tokens=res.esc_max_tokens)
                 if ans and ans.strip():
-                    RESULTS[tid] = ans.strip()
-                    CONF[tid] = 0.88
+                    _apply_remote(tid, cat, ans)
                     flush()
 
 

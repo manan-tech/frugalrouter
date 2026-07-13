@@ -49,6 +49,37 @@ _CAPS = {
 
 _FENCE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
 
+# Exemplar retrieval for the code categories: /models/rag holds ~200 canonical,
+# execution-verified implementations of common tasks, embedded by their
+# task-phrased descriptions. The model ADAPTS the closest reference instead of
+# writing from scratch — from-scratch is where the measured misses came from
+# (palindrome without the space-strip, lowercase-only vowel sets). A weak match
+# is harmless extra context; a wrong-but-plausible one still describes a
+# NEARBY task, so the gate can stay permissive.
+_EXEMPLAR_MIN_SIM = 0.35
+
+
+def _exemplar_block(prompt: str, k: int) -> str:
+    """Reference-implementation block to append to the user turn, or ''."""
+    try:
+        from . import rag
+        hits = rag.retrieve(prompt, k=k, pool=12, lam=0.6)
+    except Exception as e:  # noqa: BLE001 — retrieval is a bonus, never a risk
+        log(f"oneshot: exemplar retrieval failed (non-fatal): {e}")
+        return ""
+    if not hits:
+        return ""
+    hits = [h for h in hits if h.get("code") and h["score"] >= _EXEMPLAR_MIN_SIM]
+    if not hits:
+        return ""
+    parts = ["\n\nReference implementations of similar tasks (adapt to this "
+             "task's exact requirements):"]
+    for h in hits[:k]:
+        parts.append(f"```python\n{h['code']}\n```")
+    log("oneshot: exemplar(s) attached: "
+        + ", ".join(f"{h['title']}@{h['score']:.2f}" for h in hits[:k]))
+    return "\n".join(parts)
+
 
 def _chat(prompt: str, cap: int, temperature: float = 0.0) -> str:
     return GENERAL.chat(
@@ -196,8 +227,18 @@ def answer(category: str, prompt: str):
     from .pipelines import Result  # local import — pipelines imports us too
 
     cap = _CAPS.get(category, 300)
+    # Code categories generate against an exemplar-primed user turn: the task
+    # plus the closest verified reference implementation(s). Adapting correct
+    # code beats writing it from scratch — and the priming applies to the
+    # FIRST generation and every vote resample alike.
+    user_prompt = prompt
+    if category == "code_gen":
+        user_prompt = prompt + _exemplar_block(prompt, k=2)
+    elif category == "code_debug":
+        user_prompt = prompt + _exemplar_block(prompt, k=1)
+
     try:
-        raw = _chat(prompt, cap)
+        raw = _chat(user_prompt, cap)
     except Exception as e:  # noqa: BLE001 — a task must never take down the run
         log(f"oneshot[{category}] generation failed: {e}")
         return Result("Unable to determine.", 0.0)
@@ -206,19 +247,28 @@ def answer(category: str, prompt: str):
         # rare with temp 0, but a blank answer is an automatic judge FAIL —
         # one nudged retry is cheap insurance
         try:
-            raw = _chat(prompt, cap, temperature=0.3)
+            raw = _chat(user_prompt, cap, temperature=0.3)
         except Exception as e:  # noqa: BLE001
             log(f"oneshot[{category}] retry failed: {e}")
         if not raw.strip():
             return Result("Unable to determine.", 0.0)
 
     if category == "code_gen":
-        shipped, confident = _majority_code(prompt, raw)
-        # confident (a >=2 behavioral cluster) -> trust it, zero tokens.
-        # no consensus -> conf below the 0.55 escalation threshold so
-        # escalate_candidates buys a remote answer; the local pick stands as
-        # the fallback if the budget/proxy can't.
-        return Result(shipped.strip(), 0.95 if confident else 0.45,
+        # LOCAL by decision (2026-07-13 endgame): exemplar-primed generation +
+        # behavioral vote across 3 primed samples picks the modal behavior.
+        # Escalation only when the model produced no usable code at all —
+        # conf 0.45 rides the factual budget as a last resort.
+        shipped, _confident = _majority_code(user_prompt, raw)
+        has_code = bool(extract_code(shipped)) and "def " in extract_code(shipped)
+        return Result(shipped.strip(), 0.95 if has_code else 0.45,
+                      esc_max_tokens=420)
+
+    if category == "code_debug":
+        # LOCAL by decision: trained format (bug sentence + fenced fix), with
+        # the exemplar showing the intended correct behavior. Escalate only a
+        # no-code answer.
+        has_code = bool(extract_code(raw)) and "def " in (extract_code(raw) or "")
+        return Result(raw.strip(), 0.95 if has_code else 0.45,
                       esc_max_tokens=420)
 
     if category == "math":
@@ -237,14 +287,24 @@ def answer(category: str, prompt: str):
         return Result(shipped, 0.95)
 
     if category == "factual":
-        # A 1.7B is confidently wrong on facts too often to trust locally, and
-        # nothing here can verify a fact (grader box: "Venus is the Red
-        # Planet"). Ship LOW conf with the remote format hint: main.early_escalate
-        # answers factual in a batch up front (primary path), and if that proxy
-        # call fails, this sub-threshold Result lets escalate_candidates retry it
-        # individually. The local answer stands only if both remote paths fail.
-        from .pipelines import FACTUAL_ESC
-        return Result(raw.strip(), 0.45, esc_suffix=FACTUAL_ESC,
-                      esc_max_tokens=160)
+        # VERIFY-DON'T-GENERATE (user, T-2h): answer locally, then have the
+        # remote model act as fact-checker instead of author. The escalation
+        # suffix embeds the LOCAL answer; the remote reply is either the
+        # single word CORRECT (a few billed tokens — the common case, since
+        # the SFT model is right on most factual) or the corrected statement.
+        # escalate_candidates parses the verdict: CORRECT keeps the local
+        # answer, anything else replaces it. Accuracy stays pinned at remote
+        # level either way; only the token bill shrinks. If the proxy dies,
+        # this sub-threshold local answer ships as the fallback, as before.
+        local = raw.strip()
+        verify_suffix = (
+            f"\n\nProposed answer: {local}\n"
+            "If the proposed answer is fully correct and answers every part "
+            "asked, reply with exactly the single word CORRECT. Otherwise "
+            "reply with only the corrected answer — one short sentence per "
+            "part asked, no hedging, no explanation of what was wrong."
+        )
+        return Result(local, 0.45, esc_suffix=verify_suffix,
+                      esc_max_tokens=120)
 
     return Result(raw.strip(), 0.95)
