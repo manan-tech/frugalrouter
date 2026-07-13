@@ -1,0 +1,6 @@
+# HF Spaces installs gradio itself from the README's sdk_version; the entry
+# here is for local runs (left unpinned so it never fights the Space runtime).
+gradio
+onnxruntime
+tokenizers
+numpy
