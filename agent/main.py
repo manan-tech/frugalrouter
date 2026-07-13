@@ -335,7 +335,17 @@ def main() -> int:
                 done += 1
                 log(f"[{done}/{len(tasks_c)}] {tid} ({cat}) early-answered remotely")
                 continue
-            mode = pick_mode(tps, len(tasks_c) - done)
+            # Budget the mode against the tasks LOCAL still has to do — not all
+            # 19. The early-escalation thread has already answered several for
+            # free, and counting them made pick_mode think it had 19 tasks to
+            # fit into the window: 19 x 26s = 494s > 425s remaining, so it
+            # instantly downgraded to lean (and on a slow box, panic) — one
+            # sample, no thinking, no voting. That is precisely where our local
+            # quality was being thrown away. Local really has ~12 tasks:
+            # 12 x 26s = 312s, which fits, so it can afford FULL quality.
+            todo = sum(1 for t2, _c2, _p2 in tasks_c[i:]
+                       if CONF.get(t2, 0) < EARLY_CONF)
+            mode = pick_mode(tps, todo)
             res = pipelines.run_task(cat, prompt, mode)
             if res.confidence > CONF.get(tid, 0):
                 RESULTS[tid] = res.answer or _FALLBACK
