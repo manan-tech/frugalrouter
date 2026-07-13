@@ -3,6 +3,8 @@
 **A fine-tuned, locally-verified, token-frugal task agent — AMD Developer Hackathon: ACT II, Track 1**
 **Final submission: `ghcr.io/manan-tech/frugalrouter:v25` — 84.2% accuracy on the hidden evaluation set at 3,388 Fireworks tokens.**
 
+**🎛️ Live demo:** [huggingface.co/spaces/MananBansal/frugalrouter-demo](https://huggingface.co/spaces/MananBansal/frugalrouter-demo) — the agent's zero-token machinery (task router, NER, sentiment, exemplar retrieval with MMR diversity) running **entirely in your browser**.
+
 FrugalRouter answers general-purpose AI tasks (factual Q&A, math, sentiment, summarisation, NER, code debugging, logic puzzles, code generation) using the fewest external tokens possible. A **LoRA-fine-tuned Qwen3-1.7B** runs entirely inside the container on 2 CPU cores, answering most categories in a single generation on its own training distribution. Purpose-trained ONNX models (router / NER / sentiment) and a sandboxed Python executor provide zero-token verification. Only the categories a 1.7B provably can't be trusted on escalate to the Fireworks proxy — batched, format-hinted, under a hard token budget.
 
 ## The core idea: put accuracy in the weights, not in sampling
@@ -143,6 +145,12 @@ frontend/        Hugging Face Space demo (router / NER / sentiment / retrieval)
 ## Stack
 
 llama.cpp (CPU) · Qwen3-1.7B + LoRA SFT · ONNX Runtime (MiniLM, BERT-NER, RoBERTa-sentiment) · Fireworks AI proxy · Python stdlib orchestrator · Docker
+
+## Acknowledgements
+
+A sincere thank-you to **[Fireworks AI](https://fireworks.ai)**. Their serverless inference platform was the backbone of this project far beyond the final escalation calls: we leaned on it heavily throughout development — for the LLM judge that scored every one of our validation runs, for the frontier models (kimi-k2p7-code, minimax-m3, gpt-oss-120b and others) that answered our escalated tasks with remarkable consistency, and for an API that simply never became the bottleneck across hundreds of eval cycles. Getting free access to serverless frontier models made the entire measure-everything methodology of this project possible. The "frugal" in FrugalRouter is a compliment: their tokens were worth being careful with.
+
+Thanks also to **AMD** and **lablab.ai** for the hackathon, the compute contract that forced genuinely interesting engineering, and the responsive support during the finals (the category-level feedback on our hidden-set failures directly shaped the final build).
 
 ## License
 
