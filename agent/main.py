@@ -118,7 +118,7 @@ def _esc_threshold(cat, override):
 # subset — v13's extra groups never got their turn. Firing every always-remote
 # category at ~t+15s, in parallel, gives escalation the FULL wall-clock window
 # instead of the last 70 seconds of it.
-EARLY_REMOTE_CATS = ("factual", "summary", "code_debug", "logic")
+EARLY_REMOTE_CATS = ("factual", "summary", "code_debug", "logic", "sentiment")
 # Written above every local confidence tier (max 0.92) so a racing local
 # pipeline result can never overwrite an early remote answer, AND above the
 # strictest category threshold (ner 0.95) so the normal escalation pass
@@ -187,9 +187,16 @@ def escalate_candidates(tasks_meta, threshold=None):
             fireworks.raise_budget(config.EMERGENCY_BUDGET_TOKENS)
     cands = [(tid, cat, prompt, res) for tid, cat, prompt, res in tasks_meta
              if CONF.get(tid, 0) < _esc_threshold(cat, threshold)]
-    if not cands or config.ESCALATION_BUDGET_TOKENS <= 0:
+    # Gate on the LIVE budget, never the baked constant. raise_budget() mutates
+    # fireworks.BUDGET.total (emergency promotion, mass-fallback, soft-deadline);
+    # testing config.ESCALATION_BUDGET_TOKENS instead meant a zero-token build
+    # could NEVER escalate even after the emergency path fired — the safety net
+    # was dead on arrival. Observed in a real run: "19 weak tasks but escalation
+    # budget is 0 — staying local" logged AFTER "budget raised to 12000".
+    if not cands or fireworks.BUDGET.total <= 0:
         if cands:
-            log(f"{len(cands)} weak tasks but escalation budget is 0 — staying local")
+            log(f"{len(cands)} weak tasks but live budget is "
+                f"{fireworks.BUDGET.total} — staying local")
         return
     # group by category: same-category weak questions ride one batched call
     # (byte-stable prefix -> cache-friendly). Cheapest category first, and
@@ -294,8 +301,14 @@ def main() -> int:
     tps = llm.probe_tps() if servers_ok else 0.0
 
     # classify + sort by category so llama.cpp reuses cached prompt prefixes
+    # Order: LOCAL-ONLY categories first, always-remote last. The early thread
+    # fetches the remote ones concurrently; by the time the local loop reaches
+    # them their answers have landed and the loop skips them. Ordering them first
+    # made local BURN WALL-CLOCK computing answers remote was already fetching —
+    # and wall-clock is the scarce resource on their box. Within each group we
+    # still sort by category so llama.cpp reuses cached prompt prefixes.
     tasks_c = sorted(((tid, classify_routed(p), p) for tid, p in tasks),
-                     key=lambda t: t[1])
+                     key=lambda t: (t[1] in EARLY_REMOTE_CATS, t[1]))
     log("categories: " + ", ".join(f"{tid}={cat}" for tid, cat, _ in tasks_c))
 
     local_usable = servers_ok and tps >= config.TPS_DEAD

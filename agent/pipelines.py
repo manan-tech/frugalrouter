@@ -781,10 +781,16 @@ def _normalize_code(code: str) -> str:
 
 def _is_echo_of_buggy(prompt: str, fixed_code: str) -> bool:
     """The coder model sometimes returns the buggy code unchanged."""
-    m = re.search(r"def .*?(?=\.\s|$)", prompt, re.DOTALL)
-    if not m:
+    buggy = ""
+    if "```" in prompt:
+        buggy = extract_code(prompt)
+    else:
+        m = re.search(r"def .*?(?=\.\s|$)", prompt, re.DOTALL)
+        if m:
+            buggy = m.group(0)
+    if not buggy:
         return False
-    return _normalize_code(m.group(0)) == _normalize_code(fixed_code)
+    return _normalize_code(buggy) == _normalize_code(fixed_code)
 
 
 def code_debug(prompt: str, mode: str) -> Result:

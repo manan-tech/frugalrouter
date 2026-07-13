@@ -82,7 +82,7 @@ def ner(prompt: str) -> str:
         s = dm.group(0).strip()
         if s.lower() not in seen:
             seen.add(s.lower())
-            lines.append(f"{s} | Date")
+            lines.append(f"{s} | DATE")
     # capitalized runs (skip sentence starts of common words)
     for cm in re.finditer(r"\b(?:[A-Z][a-zA-Z'&.]+(?:\s+(?:of|the|de|for))?\s+){1,4}"
                           r"[A-Z][a-zA-Z'&.]+\b|\b[A-Z][a-zA-Z'&.]+\b", text):
@@ -91,11 +91,11 @@ def ner(prompt: str) -> str:
             continue
         seen.add(s.lower())
         if any(h in s for h in _ORG_HINTS):
-            kind = "Organization"
+            kind = "ORGANIZATION"
         elif re.fullmatch(r"(?:Dr\.?\s+)?[A-Z][a-z]+\s+[A-Z][a-z]+", s):
-            kind = "Person"
+            kind = "PERSON"
         else:
-            kind = "Location"
+            kind = "LOCATION"
         lines.append(f"{s} | {kind}")
     return "\n".join(lines[:10]) if lines else "None"
 

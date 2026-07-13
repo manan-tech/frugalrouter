@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -52,7 +52,4 @@ Token economics drive everything: rank = ascending billed tokens among entries a
 
 **Config contract** (`config.py`): the grading harness injects only `FIREWORKS_API_KEY`, `FIREWORKS_BASE_URL`, `ALLOWED_MODELS`. Every other env read (wall-clock overrides, `TEST_FORCE_EMERGENCY`, `CATEGORY_THRESHOLDS_JSON`, `CALIBRATION_LOG_PATH`) exists for the CI harness only — baked defaults must always be production-correct. `ALLOWED_MODELS`, when present, takes strict precedence over `FALLBACK_MODELS`; calls to unlisted models invalidate the submission.
 
-**Hard constraints**: the image installs only `onnxruntime` + `tokenizers` at BUILD time (for the
-local NER/sentiment/router models — a top team, yassai, ships `libonnxruntime.so` too, so this is
-clearly permitted; the rule that `agent/` be stdlib-only was OUR OWN self-imposed constraint, not the
-organizers'). Image must stay well under 5 GB compressed. Everything the container needs is baked at build time (`HF_HUB_OFFLINE=1`); the only permitted egress is the Fireworks proxy — any other network routing disqualifies the submission.
+**Hard constraints**: `agent/` is pure Python stdlib (no pip installs in the image). Image must stay well under 5 GB compressed. Everything the container needs is baked at build time (`HF_HUB_OFFLINE=1`); the only permitted egress is the Fireworks proxy — any other network routing disqualifies the submission.

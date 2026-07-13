@@ -6,20 +6,20 @@ on:
         description: "task file"
         default: "eval/variants.json"
       soft_s:
-        description: "SOFT_NEW_WORK_S"
-        default: "1500"
+        description: "SOFT_NEW_WORK_S (production default — do not loosen)"
+        default: "445"
       flush_s:
-        description: "FLUSH_S"
-        default: "1700"
+        description: "FLUSH_S (production default)"
+        default: "505"
       hard_s:
-        description: "HARD_EXIT_S"
-        default: "1750"
+        description: "HARD_EXIT_S (production default)"
+        default: "535"
       budget:
-        description: "ESCALATION_BUDGET_TOKENS"
-        default: "900"
+        description: "ESCALATION_BUDGET_TOKENS (production default)"
+        default: "6000"
       cpus:
-        description: "docker --cpus"
-        default: "2"
+        description: "docker --cpus (1 reproduces the grader's 6-8 tok/s — use it)"
+        default: "1"
       force_emergency:
         description: "TEST_FORCE_EMERGENCY (1 = force emergency escalate-all path)"
         default: "0"

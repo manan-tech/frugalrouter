@@ -48,12 +48,12 @@ _TYPE_MAP = {
 _MONTH = (r"January|February|March|April|May|June|July|August|September|"
           r"October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec")
 _DATE_RES = [
-    re.compile(rf"\b(?:{_MONTH})\s+\d{{1,2}},?\s+\d{{4}}\b"),   # March 5, 2022
-    re.compile(rf"\b\d{{1,2}}\s+(?:{_MONTH})\s+\d{{4}}\b"),      # 5 March 2022
-    re.compile(rf"\b(?:{_MONTH})\s+\d{{4}}\b"),                  # March 2022
+    re.compile(rf"\b(?:{_MONTH})\s+\d{{1,2}},?\s+\d{{4}}\b", re.IGNORECASE),   # March 5, 2022
+    re.compile(rf"\b\d{{1,2}}\s+(?:{_MONTH})\s+\d{{4}}\b", re.IGNORECASE),      # 5 March 2022
+    re.compile(rf"\b(?:{_MONTH})\s+\d{{4}}\b", re.IGNORECASE),                  # March 2022
     re.compile(r"\b\d{4}-\d{2}-\d{2}\b"),                        # 2022-03-05
     re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}\b"),                  # 03/05/2022
-    re.compile(rf"\b(?:{_MONTH})\s+\d{{1,2}}\b"),                # March 5
+    re.compile(rf"\b(?:{_MONTH})\s+\d{{1,2}}\b", re.IGNORECASE),                # March 5
     re.compile(r"\b(?:last|next|this)\s+(?:year|month|week|"
                rf"{_MONTH})\b", re.IGNORECASE),                  # last April
     re.compile(r"\b(?:19|20)\d{2}\b"),                           # bare year

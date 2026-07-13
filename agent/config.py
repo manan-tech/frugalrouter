@@ -90,7 +90,7 @@ ESC_CAPS = {
 # environment that swings +-16 points. Margin is worth ~900 tokens.
 CATEGORY_THRESHOLDS = {"factual": 0.99, "code_debug": 0.99, "code_gen": 0.40,
                        "logic": 0.99, "math": 0.65, "ner": 0.40,
-                       "sentiment": 0.40, "summary": 0.99}
+                       "sentiment": 0.99, "summary": 0.99}
 # eval-only A/B override (the grading harness never sets this): JSON dict
 # merged over the baked thresholds, e.g. '{"code_debug": 0.95}' = Balanced
 _thr_env = os.environ.get("CATEGORY_THRESHOLDS_JSON", "")
