@@ -1024,12 +1024,19 @@ def _enforce_generic_format(category: str, prompt: str, res: Result) -> Result:
         if ok:
             return res
         log(f"generic-format check failed ({category}): {verdict[:80]}")
+        # The redo must speak the SFT model's trained dialect: SYSTEM_PROMPT
+        # byte-identical to training, ALL variation in the user turn. A novel
+        # system prompt moves the model off-distribution — measured to make it
+        # ignore the instruction and re-answer the raw task its own way.
+        from .oneshot import SYSTEM_PROMPT as _ONESHOT_SYS
         redo = GENERAL.chat(
             [{"role": "system", "content":
+              _ONESHOT_SYS if config.ONE_SHOT else
               "Answer the task, following its stated format requirements "
               "EXACTLY. Output only the answer."},
              {"role": "user", "content":
-              f"{prompt}\n\n(Your previous answer violated: {verdict[:120]})"}],
+              f"{prompt}\n\n(Follow the stated format requirements EXACTLY. "
+              f"A previous answer violated: {verdict[:120]})"}],
             max_tokens=max(res.esc_max_tokens, 220), temperature=0.4)
         if redo.strip():
             ok2, _v2 = _compliance_check(prompt, redo)
